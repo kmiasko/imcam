@@ -10,7 +10,9 @@ def test_h265_packetize_splits_large_nal_into_fragmentation_units():
     fus = [p for p, _ in pk[1:]]
     assert all((p[0] >> 1) & 0x3F == 49 and p[2] & 0x3F == 19 for p in fus)
     assert fus[0][2] & 0x80 and fus[-1][2] & 0x40 and not fus[0][2] & 0x40
-    rebuilt = bytes([(fus[0][0] & 0x81) | (19 << 1), fus[0][1]]) + b"".join(p[3:] for p in fus)
+    rebuilt = bytes([(fus[0][0] & 0x81) | (19 << 1), fus[0][1]]) + b"".join(
+        p[3:] for p in fus
+    )
     assert rebuilt == big
 
 

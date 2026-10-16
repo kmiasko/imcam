@@ -1,6 +1,7 @@
 """Event delivery: a log line, a desktop notification (notify-send on Linux, osascript on macOS, winotify
 toasts on Windows) and the user's hook command. send() never raises; it returns False when no backend
 could show the message."""
+
 import os
 import shlex
 import shutil
@@ -23,11 +24,24 @@ def send(title, message):
     b = backend()
     try:
         if b == "notify-send":
-            subprocess.Popen(["notify-send", "-u", "critical", title, message], **_DEVNULL)
+            subprocess.Popen(
+                ["notify-send", "-u", "critical", title, message], **_DEVNULL
+            )
         elif b == "osascript":  # message goes in as argv, never spliced into the script
-            subprocess.Popen(["osascript", "-e", "on run argv",
-                              "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
-                              "-e", "end run", title, message], **_DEVNULL)
+            subprocess.Popen(
+                [
+                    "osascript",
+                    "-e",
+                    "on run argv",
+                    "-e",
+                    "display notification (item 2 of argv) with title (item 1 of argv)",
+                    "-e",
+                    "end run",
+                    title,
+                    message,
+                ],
+                **_DEVNULL,
+            )
         elif b == "windows":
             return _windows(title, message)
         else:
@@ -40,6 +54,7 @@ def send(title, message):
 def _windows(title, message):
     try:
         from winotify import Notification, audio
+
         t = Notification(app_id="ImCam", title=title, msg=message, duration="long")
         t.set_audio(audio.Default, loop=False)
         t.show()
@@ -47,6 +62,7 @@ def _windows(title, message):
     except Exception:  # winotify missing or toast refused: at least make a sound
         try:
             import winsound
+
             winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
         except Exception:
             pass
@@ -70,7 +86,10 @@ def make_notifier(cfg, desktop=None, run_hook=None, log=print):
         (desktop or send)("ImCam", msg)
         if hook:
             try:
-                (run_hook or _run_hook)(hook, dict(os.environ, IMCAM_EVENT=name, IMCAM_MESSAGE=msg))
+                (run_hook or _run_hook)(
+                    hook, dict(os.environ, IMCAM_EVENT=name, IMCAM_MESSAGE=msg)
+                )
             except OSError as e:
                 print("hook failed: %s" % e, file=sys.stderr)
+
     return deliver

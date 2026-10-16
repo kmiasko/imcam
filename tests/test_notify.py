@@ -10,8 +10,12 @@ class Recorder:
         self.logs, self.toasts, self.hooks, self.hook_error = [], [], [], hook_error
 
     def notifier(self, hook=""):
-        return notify.make_notifier({"hook": hook}, desktop=lambda t, m: self.toasts.append((t, m)),
-                                    run_hook=self._hook, log=self.logs.append)
+        return notify.make_notifier(
+            {"hook": hook},
+            desktop=lambda t, m: self.toasts.append((t, m)),
+            run_hook=self._hook,
+            log=self.logs.append,
+        )
 
     def _hook(self, argv, env):
         if self.hook_error:

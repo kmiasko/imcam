@@ -9,6 +9,7 @@ Wire protocol:
   response   {"headers":{...},"ret":0,"msg":"","body":{...}}   matched by req_id
   heartbeat  every 5 s: {"headers":{"id":"pub_heartbeat","req_id":"1","time":1}}
 """
+
 import hashlib
 import json
 import os
@@ -36,6 +37,7 @@ class RspException(Exception):
 class Client:
     """Request/response session with the cloud (/fast). dial(url) -> (socket, leftover bytes) is the seam:
     ws_handshake in production, a socketpair in tests."""
+
     def __init__(self, url=None, dial=wsproto.ws_handshake, heartbeat_s=5):
         self._dial, self.heartbeat_s = dial, heartbeat_s
         self.url = url or (load_session() or {}).get("url") or DEFAULT_URL
@@ -62,11 +64,17 @@ class Client:
         for i in range(retries):
             try:
                 sock, extra = self._dial(self.url)
-                sock.settimeout(None)  # the reader blocks indefinitely; heartbeat sends detect a dead link
+                sock.settimeout(
+                    None
+                )  # the reader blocks indefinitely; heartbeat sends detect a dead link
                 self.sock = sock
                 self.alive = True
-                threading.Thread(target=self._reader, args=(sock, extra), daemon=True).start()
-                threading.Thread(target=self._heartbeat, args=(sock,), daemon=True).start()
+                threading.Thread(
+                    target=self._reader, args=(sock, extra), daemon=True
+                ).start()
+                threading.Thread(
+                    target=self._heartbeat, args=(sock,), daemon=True
+                ).start()
                 print("connected to %s" % self.url)
                 return
             except Exception as e:
@@ -124,9 +132,16 @@ class Client:
         with self.lock:
             self.req_id += 1
             rid = str(self.req_id)
-            msg = {"headers": {"callee": "", "caller": "", "id": msg_id,
-                              "req_id": rid, "time": int(time.time())},
-                   "body": body or {}}
+            msg = {
+                "headers": {
+                    "callee": "",
+                    "caller": "",
+                    "id": msg_id,
+                    "req_id": rid,
+                    "time": int(time.time()),
+                },
+                "body": body or {},
+            }
             self.pending[rid] = None
         self.send_raw(0x1, json.dumps(msg).encode())
         with self.cond:
@@ -135,7 +150,9 @@ class Client:
                 left = deadline - time.time()
                 if left <= 0:
                     del self.pending[rid]
-                    raise TimeoutError("no response to %s within %ss" % (msg_id, timeout))
+                    raise TimeoutError(
+                        "no response to %s within %ss" % (msg_id, timeout)
+                    )
                 self.cond.wait(left)
             data = self.pending.pop(rid)
         if data.get("ret", 0) != 0:
@@ -148,8 +165,13 @@ class Client:
             if not (self.alive and sock is self.sock):
                 return
             try:
-                self.send_raw(0x1, json.dumps(
-                    {"headers": {"id": "pub_heartbeat", "req_id": "1", "time": 1}}).encode(), sock)
+                self.send_raw(
+                    0x1,
+                    json.dumps(
+                        {"headers": {"id": "pub_heartbeat", "req_id": "1", "time": 1}}
+                    ).encode(),
+                    sock,
+                )
             except Exception:
                 if sock is self.sock:
                     self.alive = False
@@ -172,7 +194,9 @@ def save_session(d):
     os.makedirs(os.path.dirname(session_file()), exist_ok=True)
     # the file holds the sessid credential: create it owner-only
     fd = os.open(session_file(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    if hasattr(os, "fchmod"):  # POSIX only; also tightens a file created earlier with looser permissions
+    if hasattr(
+        os, "fchmod"
+    ):  # POSIX only; also tightens a file created earlier with looser permissions
         os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(d, f)
@@ -191,7 +215,8 @@ def udid():
 
 
 # passwords matching this are "strong"; the login request carries the inverse as simple_passwd
-PWD_RE = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d\W_]{6,64}$')
+PWD_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d\W_]{6,64}$")
+
 
 def login_body(account, passwd, sessid="", md5=True):
     # the password is sent as its lowercase MD5 hex digest, never raw
@@ -220,14 +245,26 @@ def login_body(account, passwd, sessid="", md5=True):
 def login(c, account, passwd):
     # a password login always starts with an empty sessid
     rsp = c.send("cli_login", login_body(account, passwd, ""))
-    save_session({"account": account, "sessid": rsp.get("sessid", ""),
-                 "url": c.url, "udid": udid()})
+    save_session(
+        {
+            "account": account,
+            "sessid": rsp.get("sessid", ""),
+            "url": c.url,
+            "udid": udid(),
+        }
+    )
     if rsp.get("switch_region") and rsp.get("url"):
         new_url = rsp["url"][0]
         print("switched region to %s" % new_url)
         c.connect(new_url)
-        save_session({"account": account, "sessid": rsp.get("sessid", ""),
-                     "url": new_url, "udid": udid()})
+        save_session(
+            {
+                "account": account,
+                "sessid": rsp.get("sessid", ""),
+                "url": new_url,
+                "udid": udid(),
+            }
+        )
     print("logged in as %s" % account)
 
 
@@ -252,7 +289,9 @@ def signin(c):
     rtc = next((json.loads(i["value"]) for i in (body or []) if i.get("id") == 9), None)
     if not rtc:
         raise SystemExit("no RtcConfig (dpid=9) in pub_dp_get response")
-    access_key = accesskey.derive_access_key(sessid, int(rtc["magic_md5"]), rtc["aes_key"])
+    access_key = accesskey.derive_access_key(
+        sessid, int(rtc["magic_md5"]), rtc["aes_key"]
+    )
     url = rtc["wss"]
     if url.endswith("fast"):
         url = url[:-4] + "im"
@@ -260,10 +299,19 @@ def signin(c):
     sock, extra = c._dial(url)
     sock.settimeout(None)
     buf = extra
-    signin = {"opcode": "signin", "loginType": 0, "key": rtc["access_id"],
-              "secret": access_key, "authType": 0, "authCode": "",
-              "serialCode": sessid, "mac": "", "mustPermitCode": 0,
-              "permitCode": "", "reUseSid": -1}
+    signin = {
+        "opcode": "signin",
+        "loginType": 0,
+        "key": rtc["access_id"],
+        "secret": access_key,
+        "authType": 0,
+        "authCode": "",
+        "serialCode": sessid,
+        "mac": "",
+        "mustPermitCode": 0,
+        "permitCode": "",
+        "reUseSid": -1,
+    }
     sock.sendall(wsproto.frame_encode(0x1, json.dumps(signin).encode()))
     rsp = None
     while rsp is None:
@@ -285,13 +333,34 @@ def signin(c):
 
 
 def code_check(c, account, code, token=""):
-    return c.send("cli_code_check", {"account": account, "code": code, "token": token,
-                                     "vid": VID, "vkey": config.vkey(), "oem_vid": OEM_VID})
+    return c.send(
+        "cli_code_check",
+        {
+            "account": account,
+            "code": code,
+            "token": token,
+            "vid": VID,
+            "vkey": config.vkey(),
+            "oem_vid": OEM_VID,
+        },
+    )
 
 
 def register(c, account, passwd, token="", country_code=""):
-    return c.send("cli_register", {
-        "account": account, "passwd": hashlib.md5(passwd.encode("utf-8")).hexdigest(),
-        "token": token, "country_code": country_code,
-        "default_set": 1, "language_type": 0, "notify_type": 0, "register_type": 0, "os": 2,
-        "vid": VID, "vkey": config.vkey(), "oem_vid": OEM_VID})
+    return c.send(
+        "cli_register",
+        {
+            "account": account,
+            "passwd": hashlib.md5(passwd.encode("utf-8")).hexdigest(),
+            "token": token,
+            "country_code": country_code,
+            "default_set": 1,
+            "language_type": 0,
+            "notify_type": 0,
+            "register_type": 0,
+            "os": 2,
+            "vid": VID,
+            "vkey": config.vkey(),
+            "oem_vid": OEM_VID,
+        },
+    )

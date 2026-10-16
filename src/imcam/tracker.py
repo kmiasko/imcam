@@ -6,6 +6,7 @@ line, or its height/width ratio passes a threshold, for `hold_s` seconds in a ro
 Needs numpy + OpenCV (installed with the package); imported lazily by cli.py. Config lives in
 ~/.imcam/roi.json (hand-editable, coordinates normalized to 0..1 of the frame).
 """
+
 import collections
 import json
 import os
@@ -20,23 +21,23 @@ from . import notify, paths, relay
 CONFIG_FILE = paths.path("roi.json")
 
 DEFAULTS = {
-    "roi": None,                # [[x, y], ...] crib polygon, normalized
-    "lying_line": None,         # head level when lying: [[x1, y1], [x2, y2]] (tilted ok) or a single y; blob top above it = upright
-    "lying_margin": 0.0,        # extra normalized distance above the line required
-    "aspect_thresh": 1.5,       # blob height/width above this = upright
-    "min_blob_frac": 0.02,      # blob area (fraction of ROI area) below this is ignored
-    "outside_frac": 0.02,       # foreground outside ROI (fraction of frame) pauses detection
-    "brightness_jump": 25.0,    # global mean-gray / chroma jump that resets the background model
-    "warmup_frames": 15,        # frames after a reset before detecting again
-    "learning_rate": 0.001,     # MOG2 learning rate (slow: a sitting baby must not be absorbed)
-    "hold_s": 5.0,              # upright must persist this long to fire
-    "cooldown_s": 600.0,        # minimum time between awake notifications
-    "stream_lost_s": 60.0,      # no frames for this long -> "stream lost"
+    "roi": None,  # [[x, y], ...] crib polygon, normalized
+    "lying_line": None,  # head level when lying: [[x1, y1], [x2, y2]] (tilted ok) or a single y; blob top above it = upright
+    "lying_margin": 0.0,  # extra normalized distance above the line required
+    "aspect_thresh": 1.5,  # blob height/width above this = upright
+    "min_blob_frac": 0.02,  # blob area (fraction of ROI area) below this is ignored
+    "outside_frac": 0.02,  # foreground outside ROI (fraction of frame) pauses detection
+    "brightness_jump": 25.0,  # global mean-gray / chroma jump that resets the background model
+    "warmup_frames": 15,  # frames after a reset before detecting again
+    "learning_rate": 0.001,  # MOG2 learning rate (slow: a sitting baby must not be absorbed)
+    "hold_s": 5.0,  # upright must persist this long to fire
+    "cooldown_s": 600.0,  # minimum time between awake notifications
+    "stream_lost_s": 60.0,  # no frames for this long -> "stream lost"
     "frame_w": 640,
     "frame_h": 360,
     "fps": 3,
-    "hwaccel": "auto",          # ffmpeg -hwaccel value ("" disables)
-    "hook": "",                 # command run on notifications; env IMCAM_EVENT / IMCAM_MESSAGE
+    "hwaccel": "auto",  # ffmpeg -hwaccel value ("" disables)
+    "hook": "",  # command run on notifications; env IMCAM_EVENT / IMCAM_MESSAGE
 }
 
 
@@ -57,13 +58,30 @@ def load_config(path=None):
 
 def validate_config(cfg):
     roi = cfg["roi"]
-    if (not isinstance(roi, list) or len(roi) < 3
-            or not all(isinstance(p, (list, tuple)) and len(p) == 2
-                       and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in p) for p in roi)):
+    if (
+        not isinstance(roi, list)
+        or len(roi) < 3
+        or not all(
+            isinstance(p, (list, tuple))
+            and len(p) == 2
+            and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in p)
+            for p in roi
+        )
+    ):
         raise SystemExit("roi must be >= 3 [x, y] points, each in 0..1")
     cfg["lying_line"] = norm_line(cfg["lying_line"])
-    for k in ("aspect_thresh", "min_blob_frac", "hold_s", "cooldown_s", "stream_lost_s",
-              "frame_w", "frame_h", "fps", "brightness_jump", "learning_rate"):
+    for k in (
+        "aspect_thresh",
+        "min_blob_frac",
+        "hold_s",
+        "cooldown_s",
+        "stream_lost_s",
+        "frame_w",
+        "frame_h",
+        "fps",
+        "brightness_jump",
+        "learning_rate",
+    ):
         if not isinstance(cfg[k], (int, float)) or cfg[k] <= 0:
             raise SystemExit("%s must be a positive number" % k)
     return cfg
@@ -73,12 +91,21 @@ def norm_line(ll):
     """lying_line as ((x1, y1), (x2, y2)); a bare number y means the horizontal line at y."""
     if isinstance(ll, (int, float)) and not isinstance(ll, bool) and 0 < ll < 1:
         return ((0.0, float(ll)), (1.0, float(ll)))
-    if (isinstance(ll, (list, tuple)) and len(ll) == 2
-            and all(isinstance(p, (list, tuple)) and len(p) == 2
-                    and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in p) for p in ll)
-            and ll[0][0] != ll[1][0]):
+    if (
+        isinstance(ll, (list, tuple))
+        and len(ll) == 2
+        and all(
+            isinstance(p, (list, tuple))
+            and len(p) == 2
+            and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in p)
+            for p in ll
+        )
+        and ll[0][0] != ll[1][0]
+    ):
         return tuple(tuple(map(float, p)) for p in ll)
-    raise SystemExit("lying_line must be a y in (0, 1) or two [x, y] points with different x")
+    raise SystemExit(
+        "lying_line must be a y in (0, 1) or two [x, y] points with different x"
+    )
 
 
 def line_y(line, x):
@@ -111,6 +138,7 @@ Obs.__new__.__defaults__ = (None, None, None)
 
 class Detector:
     """Interface: analyze(frame_bgr) -> Obs. A pose model can replace BgSubDetector later."""
+
     def analyze(self, frame):
         raise NotImplementedError
 
@@ -119,6 +147,7 @@ class BgSubDetector(Detector):
     def __init__(self, cfg):
         import cv2
         import numpy as np
+
         self.cv2, self.np, self.cfg = cv2, np, cfg
         self.w, self.h = cfg["frame_w"], cfg["frame_h"]
         poly = np.array([[x * self.w, y * self.h] for x, y in cfg["roi"]], np.int32)
@@ -130,25 +159,33 @@ class BgSubDetector(Detector):
         self._new_model()
 
     def _new_model(self):
-        self.mog = self.cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=25, detectShadows=True)
+        self.mog = self.cv2.createBackgroundSubtractorMOG2(
+            history=300, varThreshold=25, detectShadows=True
+        )
         self.warm = self.cfg["warmup_frames"]
 
     def _stats(self, frame):
         f = frame.astype(self.np.int16)
-        return float(f.mean()), float(self.np.abs(f[:, :, 0] - f[:, :, 2]).mean())  # brightness, chroma
+        return float(f.mean()), float(
+            self.np.abs(f[:, :, 0] - f[:, :, 2]).mean()
+        )  # brightness, chroma
 
     def analyze(self, frame):
         cv2, np, cfg = self.cv2, self.np, self.cfg
         if frame.shape[:2] != (self.h, self.w):
             frame = cv2.resize(frame, (self.w, self.h))
         stats = self._stats(frame)
-        jumped = self.prev is not None and any(abs(a - b) > cfg["brightness_jump"] for a, b in zip(stats, self.prev))
+        jumped = self.prev is not None and any(
+            abs(a - b) > cfg["brightness_jump"] for a, b in zip(stats, self.prev)
+        )
         self.prev = stats
         if jumped:  # IR <-> colour switch or lights: the model is meaningless now
             self._new_model()
         gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 0)
         # while warming up, learn fast; afterwards slowly so a sitting baby is not absorbed
-        fg = self.mog.apply(gray, learningRate=-1 if self.warm > 0 else cfg["learning_rate"])
+        fg = self.mog.apply(
+            gray, learningRate=-1 if self.warm > 0 else cfg["learning_rate"]
+        )
         if jumped:
             return Obs("reset")
         if self.warm > 0:
@@ -159,7 +196,9 @@ class BgSubDetector(Detector):
         outside = cv2.countNonZero(cv2.bitwise_and(fg, cv2.bitwise_not(self.roi_mask)))
         if outside > cfg["outside_frac"] * self.w * self.h:
             return Obs("paused")
-        inside = cv2.dilate(cv2.bitwise_and(fg, self.roi_mask), self.kernel, iterations=2)
+        inside = cv2.dilate(
+            cv2.bitwise_and(fg, self.roi_mask), self.kernel, iterations=2
+        )
         cnts = cv2.findContours(inside, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
         if not cnts:
             return Obs("empty")
@@ -169,19 +208,27 @@ class BgSubDetector(Detector):
             return Obs("empty")
         x, y, w, h = cv2.boundingRect(c)
         top, ratio = y / self.h, h / max(1, w)
-        tx = c[c[:, 0, 1].argmin(), 0, 0] / self.w  # x of the blob's highest point, compared to the line there
-        upright = top < line_y(cfg["lying_line"], tx) - cfg["lying_margin"] or ratio > cfg["aspect_thresh"]
+        tx = (
+            c[c[:, 0, 1].argmin(), 0, 0] / self.w
+        )  # x of the blob's highest point, compared to the line there
+        upright = (
+            top < line_y(cfg["lying_line"], tx) - cfg["lying_margin"]
+            or ratio > cfg["aspect_thresh"]
+        )
         return Obs("upright" if upright else "lying", top, ratio, area)
 
 
 class Tracker:
     """Debounce / cooldown state machine over observations. update() returns events
     [(name, message, notify)]; times are in the caller's clock (frame timestamps)."""
+
     def __init__(self, cfg):
         self.cfg = cfg
         self.upright_since = None
-        self.fired = False        # alert already sent (or attempted) for this upright episode
-        self.alerted = False      # an awake alert is outstanding, so "lying again" is worth logging
+        self.fired = False  # alert already sent (or attempted) for this upright episode
+        self.alerted = (
+            False  # an awake alert is outstanding, so "lying again" is worth logging
+        )
         self.last_alert = None
 
     def update(self, obs, ts):
@@ -196,8 +243,14 @@ class Tracker:
         elif k == "upright":
             if self.upright_since is None:
                 self.upright_since = ts
-            if (not self.fired and ts - self.upright_since >= self.cfg["hold_s"]
-                    and (self.last_alert is None or ts - self.last_alert >= self.cfg["cooldown_s"])):
+            if (
+                not self.fired
+                and ts - self.upright_since >= self.cfg["hold_s"]
+                and (
+                    self.last_alert is None
+                    or ts - self.last_alert >= self.cfg["cooldown_s"]
+                )
+            ):
                 self.fired = self.alerted = True
                 self.last_alert = ts
                 ev.append(("awake", "baby is awake (sitting/standing up)", True))
@@ -206,6 +259,7 @@ class Tracker:
 
 class Health:
     """Stream-lost / restored events from frame arrival times (wall clock)."""
+
     def __init__(self, lost_s):
         self.lost_s, self.last, self.lost = lost_s, None, False
 
@@ -219,15 +273,19 @@ class Health:
     def check(self, now):
         if self.last is not None and not self.lost and now - self.last >= self.lost_s:
             self.lost = True
-            return [("stream_lost", "stream lost (no frames for %ds)" % self.lost_s, True)]
+            return [
+                ("stream_lost", "stream lost (no frames for %ds)" % self.lost_s, True)
+            ]
         return []
 
 
 # --- frame sources ---------------------------------------------------------------------
 
+
 def file_frames(path, cfg):
     """(ts, frame) from a video (ts = media time, sampled to cfg fps) or a single image."""
     import cv2
+
     w, h = cfg["frame_w"], cfg["frame_h"]
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
@@ -251,19 +309,47 @@ def file_frames(path, cfg):
 
 
 def ffmpeg_cmd(cfg, record_dir=None, pipe=True):
-    cmd = [paths.require_tool("ffmpeg"), "-loglevel", "error", "-fflags", "+nobuffer+genpts",
-           "-protocol_whitelist", "file,udp,rtp"]
+    cmd = [
+        paths.require_tool("ffmpeg"),
+        "-loglevel",
+        "error",
+        "-fflags",
+        "+nobuffer+genpts",
+        "-protocol_whitelist",
+        "file,udp,rtp",
+    ]
     if cfg.get("hwaccel"):
         cmd += ["-hwaccel", cfg["hwaccel"]]
     cmd += ["-i", relay.write_sdp(relay.TRACK_SDP, relay.TRACK_PORT)]
     if record_dir:
         os.makedirs(record_dir, exist_ok=True)
-        cmd += ["-map", "0:v", "-c", "copy", "-f", "segment", "-segment_time", "600",
-                "-reset_timestamps", "1", "-strftime", "1",
-                os.path.join(record_dir, "%Y%m%d-%H%M%S.mkv")]
+        cmd += [
+            "-map",
+            "0:v",
+            "-c",
+            "copy",
+            "-f",
+            "segment",
+            "-segment_time",
+            "600",
+            "-reset_timestamps",
+            "1",
+            "-strftime",
+            "1",
+            os.path.join(record_dir, "%Y%m%d-%H%M%S.mkv"),
+        ]
     if pipe:
-        cmd += ["-map", "0:v", "-vf", "fps=%s,scale=%d:%d" % (cfg["fps"], cfg["frame_w"], cfg["frame_h"]),
-                "-pix_fmt", "bgr24", "-f", "rawvideo", "-"]
+        cmd += [
+            "-map",
+            "0:v",
+            "-vf",
+            "fps=%s,scale=%d:%d" % (cfg["fps"], cfg["frame_w"], cfg["frame_h"]),
+            "-pix_fmt",
+            "bgr24",
+            "-f",
+            "rawvideo",
+            "-",
+        ]
     return cmd
 
 
@@ -283,6 +369,7 @@ def pipe_frames(cfg, record_dir, stop, on_proc=None):
     """(monotonic ts, frame) from one ffmpeg reading the RTP forward; restarted if it exits.
     on_proc(proc) is told about each ffmpeg started, so a caller can end it to unblock the read."""
     import numpy as np
+
     w, h = cfg["frame_w"], cfg["frame_h"]
     n = w * h * 3
     while not stop.is_set():
@@ -319,6 +406,7 @@ def run(frames, cfg, deliver, live):
         except Exception as e:
             print("frame source failed: %r" % e, file=sys.stderr)
         q.put(None)
+
     threading.Thread(target=pump, daemon=True).start()
 
     last = None
@@ -348,15 +436,22 @@ def run(frames, cfg, deliver, live):
 
 class LiveTracker:
     """Background tracking (and/or recording) of the RTP forward; stop() ends it and waits for ffmpeg."""
+
     def __init__(self, record_dir=None, track=True):
         self.stop_ev = threading.Event()
         self.proc = self.thread = None
         cfg = load_config() if track else dict(DEFAULTS)
         if track:
             self.thread = threading.Thread(
-                target=run, args=(pipe_frames(cfg, record_dir, self.stop_ev, self._on_proc), cfg,
-                                  notify.make_notifier(cfg), True),
-                daemon=True)
+                target=run,
+                args=(
+                    pipe_frames(cfg, record_dir, self.stop_ev, self._on_proc),
+                    cfg,
+                    notify.make_notifier(cfg),
+                    True,
+                ),
+                daemon=True,
+            )
             self.thread.start()
         else:  # recording only
             self.proc = subprocess.Popen(ffmpeg_cmd(cfg, record_dir, pipe=False))
@@ -383,12 +478,29 @@ def run_file(path):
 
 # --- calibration -----------------------------------------------------------------------
 
+
 def snapshot_live():
     import cv2
     import numpy as np
-    cmd = [paths.require_tool("ffmpeg"), "-loglevel", "error", "-protocol_whitelist", "file,udp,rtp",
-           "-skip_frame", "nokey", "-i", relay.write_sdp(relay.SNAP_SDP, relay.SNAP_PORT),
-           "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]
+
+    cmd = [
+        paths.require_tool("ffmpeg"),
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        "file,udp,rtp",
+        "-skip_frame",
+        "nokey",
+        "-i",
+        relay.write_sdp(relay.SNAP_SDP, relay.SNAP_PORT),
+        "-frames:v",
+        "1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "-",
+    ]
     try:
         with relay.SnapshotFlag().request():
             out = subprocess.run(cmd, stdout=subprocess.PIPE, timeout=40).stdout
@@ -396,7 +508,9 @@ def snapshot_live():
         out = b""
     img = cv2.imdecode(np.frombuffer(out, np.uint8), cv2.IMREAD_COLOR) if out else None
     if img is None:
-        raise SystemExit("no frame from the live stream; run `imcam watch` or `monitor` first")
+        raise SystemExit(
+            "no frame from the live stream; run `imcam watch` or `monitor` first"
+        )
     return img
 
 
@@ -405,6 +519,7 @@ def calibrate(input_file=None):
     if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY"):
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     import cv2
+
     if input_file:
         cap = cv2.VideoCapture(input_file)
         ok, img = cap.read()
@@ -418,16 +533,27 @@ def calibrate(input_file=None):
     def redraw():
         v = img.copy()
         if len(pts) > 1:
-            cv2.polylines(v, [__import__("numpy").array(pts, "int32")], phase[0] != "roi", (0, 255, 0), 2)
+            cv2.polylines(
+                v,
+                [__import__("numpy").array(pts, "int32")],
+                phase[0] != "roi",
+                (0, 255, 0),
+                2,
+            )
         for p in pts:
             cv2.circle(v, tuple(p), 4, (0, 255, 0), -1)
         for p in line:
             cv2.circle(v, tuple(p), 4, (0, 0, 255), -1)
         if len(line) == 2 and line[0][0] != line[1][0]:
-            ext = [(x, int(line_y([[a / w, b / h] for a, b in line], x / w) * h)) for x in (0, w)]
+            ext = [
+                (x, int(line_y([[a / w, b / h] for a, b in line], x / w) * h))
+                for x in (0, w)
+            ]
             cv2.line(v, ext[0], ext[1], (0, 0, 255), 2)
-        msg = {"roi": "click crib corners, Enter when done (u=undo)",
-               "line": "click 2 points of the head level when lying (can be tilted), Enter to save (u=undo)"}[phase[0]]
+        msg = {
+            "roi": "click crib corners, Enter when done (u=undo)",
+            "line": "click 2 points of the head level when lying (can be tilted), Enter to save (u=undo)",
+        }[phase[0]]
         cv2.putText(v, msg, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.imshow("calibrate", v)
 
@@ -465,5 +591,7 @@ def calibrate(input_file=None):
             elif phase[0] == "line" and len(line) == 2 and line[0][0] != line[1][0]:
                 break
     cv2.destroyAllWindows()
-    path = save_config([(x / w, y / h) for x, y in pts], [(x / w, y / h) for x, y in line])
+    path = save_config(
+        [(x / w, y / h) for x, y in pts], [(x / w, y / h) for x, y in line]
+    )
     print("saved %s" % path)

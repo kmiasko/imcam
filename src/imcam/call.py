@@ -1,6 +1,7 @@
 """The WebRTC call to the camera: signaling messages over /im, the offer built from the official app's
 template, and the call state machine. The peer connection is the seam: AiortcPeer in production, a scripted
 fake in tests."""
+
 import asyncio
 import json
 import os
@@ -14,18 +15,30 @@ from . import cloud, debug, paths, extract_offer, testvideo, wsproto
 
 def _ice_servers(rsp):
     from aiortc import RTCIceServer
+
     servers = [RTCIceServer(urls=u) for u in rsp.get("stunAddr", [])]
-    for u, user, pwd in zip(rsp.get("turnAddr", []), rsp.get("turnUser", []), rsp.get("turnPass", [])):
-        servers.append(RTCIceServer(urls=u.split("?")[0], username=user, credential=pwd))
+    for u, user, pwd in zip(
+        rsp.get("turnAddr", []), rsp.get("turnUser", []), rsp.get("turnPass", [])
+    ):
+        servers.append(
+            RTCIceServer(urls=u.split("?")[0], username=user, credential=pwd)
+        )
     return servers
 
 
 def _call_msg(sid, serial, permit, msg_type, message=""):
     """Signaling message with the field set the server expects (toSid is always -1)."""
-    msg = {"opcode": "message", "messageType": msg_type, "sid": sid, "serialCode": "",
-           "toSerialCode": serial, "permitCode": permit, "message": message,
-           "reqId": "a_sig_py_%s_%d" % (uuid.uuid4().hex[:6], time.time_ns() % 1000),
-           "toSid": -1}
+    msg = {
+        "opcode": "message",
+        "messageType": msg_type,
+        "sid": sid,
+        "serialCode": "",
+        "toSerialCode": serial,
+        "permitCode": permit,
+        "message": message,
+        "reqId": "a_sig_py_%s_%d" % (uuid.uuid4().hex[:6], time.time_ns() % 1000),
+        "toSid": -1,
+    }
     if msg_type == "callRequest":
         msg.update(callType=0, videoCodecType=0)
     return msg
@@ -38,7 +51,7 @@ def _local_candidates(sdp):
         if line.startswith("m="):
             idx += 1
         elif line.startswith("a=mid:"):
-            mid = line[len("a=mid:"):]
+            mid = line[len("a=mid:") :]
         elif line.startswith("a=candidate:"):
             out.append({"sdpMid": mid, "sdpMLineIndex": idx, "candidate": line[2:]})
     return out
@@ -46,10 +59,11 @@ def _local_candidates(sdp):
 
 def _remote_candidate(d):
     from aiortc.sdp import candidate_from_sdp
+
     m = json.loads(d.get("message") or "{}")
     line = m.get("candidate", "")
     if line.startswith("candidate:"):
-        line = line[len("candidate:"):]
+        line = line[len("candidate:") :]
     if not line:
         return None
     c = candidate_from_sdp(line)
@@ -60,6 +74,7 @@ def _remote_candidate(d):
 class _Signal:
     """Blocking /im socket: a reader thread feeds parsed messages to an asyncio queue,
     a heartbeat thread keeps the session alive. Writes are serialized with a lock."""
+
     def __init__(self, sock, buf, loop, inbox):
         self.sock, self.buf, self.loop, self.inbox = sock, buf, loop, inbox
         self.wlock = threading.Lock()
@@ -122,7 +137,8 @@ def offer_template_path():
             "shipped with imcam.\n"
             "Capture the app's signaling log while it opens a live view (e.g. `adb logcat -d > app.log`), then run:\n"
             "    imcam extract-offer app.log\n"
-            "See the README section \"The app offer\"." % tpl)
+            'See the README section "The app offer".' % tpl
+        )
     return tpl
 
 
@@ -135,9 +151,11 @@ def _munge_offer(sdp):
 class AiortcPeer:
     """Peer-connection adapter over aiortc: an offer with video first and a silent audio track; the video we
     send is the H.265 test pattern (the camera's own H.265 is picked up by the relay, not by aiortc)."""
+
     def __init__(self, rsp):
         from aiortc import RTCConfiguration, RTCPeerConnection
         from aiortc.mediastreams import AudioStreamTrack
+
         self.pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers(rsp)))
         # Video first (mid 0), audio second. No video track: we write the H.265 RTP ourselves.
         self.video = self.pc.addTransceiver("video", direction="sendrecv")
@@ -151,7 +169,10 @@ class AiortcPeer:
 
     async def accept_answer(self, sdp):
         from aiortc import RTCSessionDescription
-        await self.pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="answer"))
+
+        await self.pc.setRemoteDescription(
+            RTCSessionDescription(sdp=sdp, type="answer")
+        )
 
     async def add_remote_candidate(self, message):
         cand = _remote_candidate(message)
@@ -179,14 +200,24 @@ class AiortcPeer:
         await self.pc.close()
 
 
-async def run_call(sig, inbox, peer, sid, serial, permit, munge=None, answer_timeout=15):
+async def run_call(
+    sig, inbox, peer, sid, serial, permit, munge=None, answer_timeout=15
+):
     """Offer, then handle the device's signaling messages until the call ends. Returns why it ended:
     no_answer | signaling_closed | rejected | refused | hangup. sig.send(obj) writes a signaling message,
     inbox yields parsed messages (None = signaling closed), peer is an AiortcPeer or a fake."""
     munge = munge or _munge_offer
     loop = asyncio.get_running_loop()
     local = await peer.offer()
-    sig.send(_call_msg(sid, serial, permit, "callRequest", json.dumps({"type": "offer", "sdp": munge(local)})))
+    sig.send(
+        _call_msg(
+            sid,
+            serial,
+            permit,
+            "callRequest",
+            json.dumps({"type": "offer", "sdp": munge(local)}),
+        )
+    )
     print("call request sent to %s, waiting for answer ..." % serial)
     # each local candidate is also sent to the peer as its own remoteCandidate message
     for cand in _local_candidates(local):
@@ -196,9 +227,13 @@ async def run_call(sig, inbox, peer, sid, serial, permit, munge=None, answer_tim
     try:
         while True:
             try:
-                d = await asyncio.wait_for(inbox.get(), None if answered else answer_timeout)
+                d = await asyncio.wait_for(
+                    inbox.get(), None if answered else answer_timeout
+                )
             except asyncio.TimeoutError:
-                print("no answer from device within %ss" % answer_timeout, file=sys.stderr)
+                print(
+                    "no answer from device within %ss" % answer_timeout, file=sys.stderr
+                )
                 reason = "no_answer"
                 break
             if d is None:
@@ -223,13 +258,32 @@ async def run_call(sig, inbox, peer, sid, serial, permit, munge=None, answer_tim
                 await peer.accept_answer(ans["sdp"])
                 answered = True
                 print("answer received, connecting ...")
-                video_task = loop.create_task(peer.send_video(
-                    lambda: sig.send(_call_msg(sid, serial, permit, "switchVideo", json.dumps({"type": 2, "act": 0})))))
+                video_task = loop.create_task(
+                    peer.send_video(
+                        lambda: sig.send(
+                            _call_msg(
+                                sid,
+                                serial,
+                                permit,
+                                "switchVideo",
+                                json.dumps({"type": 2, "act": 0}),
+                            )
+                        )
+                    )
+                )
                 for message in early:
                     await peer.add_remote_candidate(message)
                 early = []
                 # switchAudio (remote audio off) goes out right after the answer
-                sig.send(_call_msg(sid, serial, permit, "switchAudio", json.dumps({"type": 0, "act": 0})))
+                sig.send(
+                    _call_msg(
+                        sid,
+                        serial,
+                        permit,
+                        "switchAudio",
+                        json.dumps({"type": 0, "act": 0}),
+                    )
+                )
             elif mt == "remoteCandidate":
                 if answered:
                     await peer.add_remote_candidate(d)

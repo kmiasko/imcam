@@ -20,12 +20,23 @@ IGNORES_SIGTERM = "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG
 
 @pytest.fixture
 def fake_ffmpeg(monkeypatch):
-    cfg = tracker.validate_config(dict(tracker.DEFAULTS, roi=[[0.1, 0.3], [0.9, 0.3], [0.9, 0.95], [0.1, 0.95]],
-                                       lying_line=0.6, fps=20))
+    cfg = tracker.validate_config(
+        dict(
+            tracker.DEFAULTS,
+            roi=[[0.1, 0.3], [0.9, 0.3], [0.9, 0.95], [0.1, 0.95]],
+            lying_line=0.6,
+            fps=20,
+        )
+    )
     monkeypatch.setattr(tracker, "load_config", lambda path=None: cfg)
 
     def use(script):
-        monkeypatch.setattr(tracker, "ffmpeg_cmd", lambda cfg, record_dir=None, pipe=True: [sys.executable, "-c", script])
+        monkeypatch.setattr(
+            tracker,
+            "ffmpeg_cmd",
+            lambda cfg, record_dir=None, pipe=True: [sys.executable, "-c", script],
+        )
+
     return use
 
 
@@ -38,7 +49,9 @@ def wait_for(cond, timeout=5.0):
     return False
 
 
-def test_stop_returns_only_after_ffmpeg_and_the_tracking_thread_are_gone(fake_ffmpeg, capsys):
+def test_stop_returns_only_after_ffmpeg_and_the_tracking_thread_are_gone(
+    fake_ffmpeg, capsys
+):
     fake_ffmpeg(FRAMES)
     live = tracker.LiveTracker(track=True)
     assert wait_for(lambda: live.proc is not None)
@@ -51,7 +64,9 @@ def test_stop_returns_only_after_ffmpeg_and_the_tracking_thread_are_gone(fake_ff
 
 
 def test_stop_unblocks_a_tracker_waiting_on_a_silent_ffmpeg(fake_ffmpeg):
-    fake_ffmpeg(STALLED)  # stream lost: ffmpeg is alive but writes nothing, so the reader is blocked
+    fake_ffmpeg(
+        STALLED
+    )  # stream lost: ffmpeg is alive but writes nothing, so the reader is blocked
     live = tracker.LiveTracker(track=True)
     assert wait_for(lambda: live.proc is not None)
     started = time.monotonic()
@@ -70,7 +85,10 @@ def test_recording_only_stop_waits_for_ffmpeg(fake_ffmpeg):
 @pytest.mark.skipif(os.name == "nt", reason="needs POSIX signals")
 def test_an_ffmpeg_that_ignores_sigterm_is_killed_after_the_grace_period():
     import subprocess
-    proc = subprocess.Popen([sys.executable, "-c", IGNORES_SIGTERM], stdout=subprocess.PIPE)
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", IGNORES_SIGTERM], stdout=subprocess.PIPE
+    )
     time.sleep(0.3)  # let it install the handler
     started = time.monotonic()
     tracker.stop_process(proc, grace=0.5)

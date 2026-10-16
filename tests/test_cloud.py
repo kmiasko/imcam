@@ -23,6 +23,7 @@ def wait_for(cond, timeout=3.0):
 
 class Server:
     """The far end of an in-memory socket: records what the client sends, answers via handler(msg)."""
+
     def __init__(self, handler=None):
         self.client_sock, self.peer = socket.socketpair()
         self.handler, self.received, self.ops = handler, [], []
@@ -53,11 +54,20 @@ class Server:
 
 
 def ok(msg, body=None, **extra):
-    return dict({"headers": {"req_id": msg["headers"]["req_id"]}, "ret": 0, "msg": "", "body": body or {}}, **extra)
+    return dict(
+        {
+            "headers": {"req_id": msg["headers"]["req_id"]},
+            "ret": 0,
+            "msg": "",
+            "body": body or {},
+        },
+        **extra,
+    )
 
 
 class Net:
     """dial() hands out a fresh in-memory Server per connection and remembers the URLs asked for."""
+
     def __init__(self, handler=None):
         self.handler, self.urls, self.servers = handler, [], []
 
@@ -78,7 +88,12 @@ def env(tmp_path, monkeypatch):
 
 def client_for(handler=None, **kw):
     net = Net(handler)
-    c = cloud.Client(url="wss://cloud.test/fast", dial=net.dial, heartbeat_s=kw.pop("heartbeat_s", 60), **kw)
+    c = cloud.Client(
+        url="wss://cloud.test/fast",
+        dial=net.dial,
+        heartbeat_s=kw.pop("heartbeat_s", 60),
+        **kw,
+    )
     c.connect(retries=1)
     return c, net
 
@@ -98,7 +113,13 @@ def test_responses_are_matched_by_req_id():
 
 
 def test_nonzero_ret_raises_rsp_exception():
-    c, _ = client_for(lambda m: {"headers": {"req_id": m["headers"]["req_id"]}, "ret": 7, "msg": "denied"})
+    c, _ = client_for(
+        lambda m: {
+            "headers": {"req_id": m["headers"]["req_id"]},
+            "ret": 7,
+            "msg": "denied",
+        }
+    )
     with pytest.raises(cloud.RspException, match="ret=7 msg=denied"):
         c.send("cli_login")
     c.close()
@@ -130,26 +151,34 @@ def test_ping_is_answered_with_pong():
 
 def test_heartbeats_are_sent_periodically():
     c, net = client_for(heartbeat_s=0.05)
-    assert wait_for(lambda: any(m["headers"]["id"] == "pub_heartbeat" for m in net.servers[0].received))
+    assert wait_for(
+        lambda: any(
+            m["headers"]["id"] == "pub_heartbeat" for m in net.servers[0].received
+        )
+    )
     c.close()
 
 
 def test_losing_the_link_marks_the_client_dead():
     c, net = client_for()
     assert c.alive
-    net.servers[0].peer.shutdown(socket.SHUT_RDWR)  # close() alone would not wake the thread blocked in recv
+    net.servers[0].peer.shutdown(
+        socket.SHUT_RDWR
+    )  # close() alone would not wake the thread blocked in recv
     assert wait_for(lambda: not c.alive)
 
 
 def test_connect_gives_up_with_system_exit():
     def dial(url):
         raise OSError("unreachable")
+
     c = cloud.Client(url="wss://cloud.test/fast", dial=dial)
     with pytest.raises(SystemExit, match="cannot connect"):
         c.connect(retries=1)
 
 
 # --- login / saved session ---
+
 
 def test_login_body_hashes_the_password_and_flags_simple_ones():
     strong = cloud.login_body("a@b.c", "Abcdef1!")
@@ -161,7 +190,11 @@ def test_login_body_hashes_the_password_and_flags_simple_ones():
 
 def test_session_relogin_body_sends_stored_sessid_and_empty_password():
     body = cloud.login_body("a@b.c", "", "SESS", md5=False)
-    assert body["passwd"] == "" and body["sessid"] == "SESS" and body["simple_passwd"] is False
+    assert (
+        body["passwd"] == ""
+        and body["sessid"] == "SESS"
+        and body["simple_passwd"] is False
+    )
 
 
 def test_udid_is_created_once_and_reused():
@@ -173,7 +206,12 @@ def test_login_saves_the_session_owner_only():
     c, _ = client_for(lambda m: ok(m, {"sessid": "S1"}))
     cloud.login(c, "a@b.c", "Abcdef1!")
     saved = cloud.load_session()
-    assert saved == {"account": "a@b.c", "sessid": "S1", "url": "wss://cloud.test/fast", "udid": cloud.udid()}
+    assert saved == {
+        "account": "a@b.c",
+        "sessid": "S1",
+        "url": "wss://cloud.test/fast",
+        "udid": cloud.udid(),
+    }
     if os.name == "posix":
         assert os.stat(cloud.session_file()).st_mode & 0o777 == 0o600
     c.close()
@@ -181,20 +219,30 @@ def test_login_saves_the_session_owner_only():
 
 def test_login_follows_a_region_switch():
     def handler(msg):
-        return ok(msg, {"sessid": "S1", "switch_region": True, "url": ["wss://eu.test/fast"]})
+        return ok(
+            msg, {"sessid": "S1", "switch_region": True, "url": ["wss://eu.test/fast"]}
+        )
+
     c, net = client_for(handler)
     cloud.login(c, "a@b.c", "Abcdef1!")
     assert net.urls == ["wss://cloud.test/fast", "wss://eu.test/fast"]
-    assert c.url == "wss://eu.test/fast" and cloud.load_session()["url"] == "wss://eu.test/fast"
+    assert (
+        c.url == "wss://eu.test/fast"
+        and cloud.load_session()["url"] == "wss://eu.test/fast"
+    )
     c.close()
 
 
 def test_ensure_logged_in_restores_from_the_saved_session():
-    cloud.save_session({"account": "a@b.c", "sessid": "S9", "url": "wss://cloud.test/fast"})
+    cloud.save_session(
+        {"account": "a@b.c", "sessid": "S9", "url": "wss://cloud.test/fast"}
+    )
     c, net = client_for(lambda m: ok(m))
     cloud.ensure_logged_in(c)
     body = net.servers[0].received[0]["body"]
-    assert body["account"] == "a@b.c" and body["sessid"] == "S9" and body["passwd"] == ""
+    assert (
+        body["account"] == "a@b.c" and body["sessid"] == "S9" and body["passwd"] == ""
+    )
     c.close()
 
 
@@ -208,7 +256,13 @@ def test_ensure_logged_in_exits_without_a_saved_session(capsys):
 
 def test_ensure_logged_in_exits_when_the_server_rejects_the_session(capsys):
     cloud.save_session({"account": "a@b.c", "sessid": "old"})
-    c, _ = client_for(lambda m: {"headers": {"req_id": m["headers"]["req_id"]}, "ret": 1, "msg": "expired"})
+    c, _ = client_for(
+        lambda m: {
+            "headers": {"req_id": m["headers"]["req_id"]},
+            "ret": 1,
+            "msg": "expired",
+        }
+    )
     with pytest.raises(SystemExit):
         cloud.ensure_logged_in(c)
     assert "session restore failed" in capsys.readouterr().err
@@ -226,17 +280,27 @@ def test_register_and_code_check_carry_vendor_constants():
     cloud.register(c, "a@b.c", "pw", "tok", "PL")
     cloud.code_check(c, "a@b.c", "1234")
     reg, chk = (m["body"] for m in net.servers[0].received)
-    assert reg["vkey"] == chk["vkey"] == "vkey" and reg["country_code"] == "PL" and len(reg["passwd"]) == 32
+    assert (
+        reg["vkey"] == chk["vkey"] == "vkey"
+        and reg["country_code"] == "PL"
+        and len(reg["passwd"]) == 32
+    )
     assert chk["code"] == "1234" and chk["token"] == ""
     c.close()
 
 
 # --- signaling sign-in ---
 
+
 def test_signin_derives_the_access_key_and_opens_the_im_socket():
     cloud.save_session({"account": "a", "sessid": "SESS"})
     cipher_b64, expected_key = make_cipher("SESS", b"plain-secret")
-    rtc = {"magic_md5": MAGIC, "aes_key": cipher_b64, "wss": "wss://rtc.test/fast", "access_id": "AID"}
+    rtc = {
+        "magic_md5": MAGIC,
+        "aes_key": cipher_b64,
+        "wss": "wss://rtc.test/fast",
+        "access_id": "AID",
+    }
     im = {}
 
     def fast(msg):
@@ -253,13 +317,24 @@ def test_signin_derives_the_access_key_and_opens_the_im_socket():
 
     def dial(url):
         net.urls.append(url)
-        return ((fast_server if url.endswith("/fast") and len(net.urls) == 1 else im_server).client_sock, b"")
+        return (
+            (
+                fast_server
+                if url.endswith("/fast") and len(net.urls) == 1
+                else im_server
+            ).client_sock,
+            b"",
+        )
 
     c = cloud.Client(url="wss://cloud.test/fast", dial=dial, heartbeat_s=60)
     c.connect(retries=1)
     sock, buf, rsp = cloud.signin(c)
     assert net.urls == ["wss://cloud.test/fast", "wss://rtc.test/im"]
-    assert rsp["sid"] == 42 and im["signin"]["secret"] == expected_key and im["signin"]["key"] == "AID"
+    assert (
+        rsp["sid"] == 42
+        and im["signin"]["secret"] == expected_key
+        and im["signin"]["key"] == "AID"
+    )
     assert im["signin"]["serialCode"] == "SESS"
     sock.close()
     c.close()

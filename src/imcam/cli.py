@@ -18,12 +18,22 @@ Commands:
   imcam calibrate [--input FILE]   click crib ROI + lying line -> ~/.imcam/roi.json
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
+
 import json
 import os
 import sys
 import time
 
-from . import call, cloud, config, extract_keys, extract_offer, paths, relay, tracker  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
+from . import (
+    call,
+    cloud,
+    config,
+    extract_keys,
+    extract_offer,
+    paths,
+    relay,
+    tracker,
+)  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
 
 
 def do_watch(c, serial, permit, track=False, record=None):
@@ -99,10 +109,19 @@ def doctor():
     """Report what is installed; returns the process exit code."""
     import importlib
     from . import notify
+
     ok = True
     for tool in ("ffmpeg", "ffplay"):
         found = __import__("shutil").which(tool)
-        print("%-8s %s" % (tool, found or "MISSING (needed for %s)" % ("watch/monitor" if tool == "ffmpeg" else "watch")))
+        print(
+            "%-8s %s"
+            % (
+                tool,
+                found
+                or "MISSING (needed for %s)"
+                % ("watch/monitor" if tool == "ffmpeg" else "watch"),
+            )
+        )
         ok &= bool(found) or tool == "ffplay"
     for mod in ("aiortc", "av", "numpy", "cv2"):
         try:
@@ -139,7 +158,7 @@ def _opt(args, name, flag=False):
     if i + 1 >= len(args):
         raise SystemExit("%s needs a value" % name)
     val = args[i + 1]
-    del args[i:i + 2]
+    del args[i : i + 2]
     return val
 
 
@@ -175,7 +194,10 @@ def main():
         except call.OfferTemplateMissing as e:
             sys.exit("error: %s" % e)
     try:
-        config.require("IMCAM_VKEY", *(("IMCAM_AES_PREFIX",) if cmd in ("watch", "monitor") else ()))
+        config.require(
+            "IMCAM_VKEY",
+            *(("IMCAM_AES_PREFIX",) if cmd in ("watch", "monitor") else ()),
+        )
     except config.ConfigMissing as e:
         sys.exit("error: %s" % e)
     url = args[1] if len(args) > 1 and args[1].startswith(("ws://", "wss://")) else None
@@ -189,11 +211,26 @@ def main():
             print(json.dumps(c.send("cli_code_get", {"account": args[1]})))
         elif cmd == "code-check":
             cloud.ensure_logged_in(c)
-            print(json.dumps(cloud.code_check(c, args[1], args[2], args[3] if len(args) > 3 else "")))
+            print(
+                json.dumps(
+                    cloud.code_check(
+                        c, args[1], args[2], args[3] if len(args) > 3 else ""
+                    )
+                )
+            )
         elif cmd == "register":
             cloud.ensure_logged_in(c)
-            print(json.dumps(cloud.register(c, args[1], args[2], args[3] if len(args) > 3 else "",
-                                            args[4] if len(args) > 4 else "")))
+            print(
+                json.dumps(
+                    cloud.register(
+                        c,
+                        args[1],
+                        args[2],
+                        args[3] if len(args) > 3 else "",
+                        args[4] if len(args) > 4 else "",
+                    )
+                )
+            )
         elif cmd == "devlist":
             cloud.ensure_logged_in(c)
             print(json.dumps(c.send("cli_dev_list", {})))
@@ -211,7 +248,9 @@ def main():
             do_watch(c, args[1], args[2], track, record)
         elif cmd == "monitor":
             if len(args) < 3:
-                raise SystemExit("usage: imcam monitor <device-serial> <permit-code> [--record DIR] [--input FILE]")
+                raise SystemExit(
+                    "usage: imcam monitor <device-serial> <permit-code> [--record DIR] [--input FILE]"
+                )
             cloud.ensure_logged_in(c)
             do_monitor(c, args[1], args[2], record)
         elif cmd == "logout":
@@ -221,7 +260,12 @@ def main():
         else:
             print("unknown command: %s" % cmd, file=sys.stderr)
             sys.exit(1)
-    except (cloud.RspException, TimeoutError, call.OfferTemplateMissing, config.ConfigMissing) as e:
+    except (
+        cloud.RspException,
+        TimeoutError,
+        call.OfferTemplateMissing,
+        config.ConfigMissing,
+    ) as e:
         print("error: %s" % e, file=sys.stderr)
         sys.exit(2)
     finally:

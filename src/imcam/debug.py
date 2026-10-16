@@ -1,5 +1,6 @@
 """IMCAM_DEBUG tracing for the RTP relay: per-packet, NAL, STUN/DTLS and RTCP diagnostics.
 Every function is a no-op unless IMCAM_DEBUG is set."""
+
 import os
 import struct
 
@@ -20,7 +21,7 @@ def nal_in(data):
     try:
         hl = 12 + (data[0] & 0x0F) * 4
         if data[0] & 0x10:
-            hl += 4 + 4 * struct.unpack("!H", data[hl + 2:hl + 4])[0]
+            hl += 4 + 4 * struct.unpack("!H", data[hl + 2 : hl + 4])[0]
         nt = (data[hl] >> 1) & 0x3F
         if nt == 49:
             nt = "fu%d" % (data[hl + 2] & 0x3F) if data[hl + 2] & 0x80 else None
@@ -54,7 +55,15 @@ def install_transport_tracing():
 
     def rx(self, data, addr):
         if isinstance(data, bytes) and data:
-            k = "stun" if data[0] < 4 else "dtls" if 20 <= data[0] < 64 else "rtp/rtcp" if data[0] >= 128 else "other"
+            k = (
+                "stun"
+                if data[0] < 4
+                else "dtls"
+                if 20 <= data[0] < 64
+                else "rtp/rtcp"
+                if data[0] >= 128
+                else "other"
+            )
             cnt["rx %s from %s" % (k, addr[0])] += 1
         orig_rx(self, data, addr)
 
@@ -65,6 +74,7 @@ def install_transport_tracing():
 
     async def handle_rtcp(self, data):
         from aiortc.rtp import RtcpPacket
+
         try:
             print("rtcp in: %s" % [type(x).__name__ for x in RtcpPacket.parse(data)])
         except ValueError:

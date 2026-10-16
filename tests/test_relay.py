@@ -26,8 +26,13 @@ class FakeSnapshot:
 
 def make_relay(ports=(relay.RTP_PORT,), snapshot=None, clock=None):
     sent, logs = [], []
-    r = relay.Relay(ports, send=lambda data, port: sent.append((port, data)), snapshot=snapshot or FakeSnapshot(),
-                    mono=clock or Clock(), log=logs.append)
+    r = relay.Relay(
+        ports,
+        send=lambda data, port: sent.append((port, data)),
+        snapshot=snapshot or FakeSnapshot(),
+        mono=clock or Clock(),
+        log=logs.append,
+    )
     return r, sent, logs
 
 
@@ -50,13 +55,17 @@ def test_snapshot_port_is_fed_only_while_a_snapshot_is_wanted():
     r.on_rtp(rtp())
     snap._wanted = True
     r.on_rtp(rtp())
-    assert [port for port, _ in sent] == [relay.RTP_PORT, relay.RTP_PORT, relay.SNAP_PORT]
+    assert [port for port, _ in sent] == [
+        relay.RTP_PORT,
+        relay.RTP_PORT,
+        relay.SNAP_PORT,
+    ]
 
 
 def test_keyframe_request_is_due_first_then_every_five_seconds():
     clock = Clock()
     r, _, _ = make_relay(clock=clock)
-    assert r.on_rtp(rtp(ssrc=7)) == 7           # first packet asks right away
+    assert r.on_rtp(rtp(ssrc=7)) == 7  # first packet asks right away
     clock.t += 4.9
     assert r.on_rtp(rtp(ssrc=7)) is None
     clock.t += 0.2
@@ -67,7 +76,10 @@ def test_progress_is_logged_every_500_packets():
     r, _, logs = make_relay()
     for _ in range(501):
         r.on_rtp(rtp())
-    assert [line.split("(")[1] for line in logs] == ["0 packets so far)", "500 packets so far)"]
+    assert [line.split("(")[1] for line in logs] == [
+        "0 packets so far)",
+        "500 packets so far)",
+    ]
 
 
 def test_snapshot_flag_request_creates_and_removes_the_flag(tmp_path):
@@ -78,13 +90,15 @@ def test_snapshot_flag_request_creates_and_removes_the_flag(tmp_path):
     assert not os.path.exists(flag.path)
 
 
-def test_snapshot_flag_is_seen_by_the_relay_side_and_polled_at_most_once_a_second(tmp_path):
+def test_snapshot_flag_is_seen_by_the_relay_side_and_polled_at_most_once_a_second(
+    tmp_path,
+):
     path = str(tmp_path / "snap.want")
     mono, wall = Clock(0.0), Clock(os.path.getmtime(str(tmp_path)))
     relay_side = relay.SnapshotFlag(path, mono=mono, wall=wall)
     assert not relay_side.wanted()
     with relay.SnapshotFlag(path).request():
-        assert not relay_side.wanted()          # cached for SNAP_POLL_S
+        assert not relay_side.wanted()  # cached for SNAP_POLL_S
         mono.t += 1.5
         wall.t = os.path.getmtime(path)
         assert relay_side.wanted()

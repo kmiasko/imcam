@@ -21,8 +21,14 @@ def server_frame(opcode, payload):
 
 
 def test_frame_round_trip_across_length_encodings():
-    heartbeat = json.dumps({"headers": {"id": "pub_heartbeat", "req_id": "1", "time": 1}}).encode()
-    for payload in (heartbeat, b"x" * 300, b"y" * 70000):  # 7-bit, 16-bit and 64-bit lengths
+    heartbeat = json.dumps(
+        {"headers": {"id": "pub_heartbeat", "req_id": "1", "time": 1}}
+    ).encode()
+    for payload in (
+        heartbeat,
+        b"x" * 300,
+        b"y" * 70000,
+    ):  # 7-bit, 16-bit and 64-bit lengths
         op, got, rest = wsproto.parse_frame(wsproto.frame_encode(0x1, payload), None)
         assert op == 0x1 and got == payload and not rest
 
@@ -34,7 +40,9 @@ def test_client_frames_are_masked_and_server_frames_are_not():
 
 
 def test_parse_frame_returns_the_bytes_after_the_frame():
-    op, payload, rest = wsproto.parse_frame(server_frame(0x1, b"one") + server_frame(0x1, b"two"), None)
+    op, payload, rest = wsproto.parse_frame(
+        server_frame(0x1, b"one") + server_frame(0x1, b"two"), None
+    )
     assert (payload, rest) == (b"one", server_frame(0x1, b"two"))
 
 
@@ -52,11 +60,17 @@ def test_parse_frame_reports_a_connection_closed_mid_frame():
         wsproto.parse_frame(server_frame(0x1, b"abc")[:3], b)
 
 
-@pytest.mark.parametrize("url, expected", [
-    ("wss://fast.jfgou.com:443/fast", ("fast.jfgou.com", 443, "/fast", True, "http://fast.jfgou.com:443/fast")),
-    ("ws://host/x", ("host", 80, "/x", False, "http://host/x")),
-    ("wss://host", ("host", 443, "/", True, "http://host")),
-])
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        (
+            "wss://fast.jfgou.com:443/fast",
+            ("fast.jfgou.com", 443, "/fast", True, "http://fast.jfgou.com:443/fast"),
+        ),
+        ("ws://host/x", ("host", 80, "/x", False, "http://host/x")),
+        ("wss://host", ("host", 443, "/", True, "http://host")),
+    ],
+)
 def test_parse_url(url, expected):  # the server expects an http:// Origin even for wss
     assert wsproto.parse_url(url) == expected
 
@@ -83,7 +97,9 @@ def _handshake_against(response):
     t = threading.Thread(target=_serve_once, args=(listener, response), daemon=True)
     t.start()
     try:
-        return wsproto.ws_handshake("ws://127.0.0.1:%d/fast" % listener.getsockname()[1], timeout=5)
+        return wsproto.ws_handshake(
+            "ws://127.0.0.1:%d/fast" % listener.getsockname()[1], timeout=5
+        )
     finally:
         t.join(5)
         listener.close()

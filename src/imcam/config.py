@@ -3,6 +3,7 @@
 Looked up in this order: environment variable, `.env` in the current directory, `~/.imcam/config.env`
 (`%USERPROFILE%\\.imcam\\config.env` on Windows). Files hold `NAME=value` lines; `#` starts a comment.
 """
+
 import os
 
 from . import paths
@@ -54,7 +55,9 @@ def get(name):
         "imcam does not ship vendor constants. Put it in the environment, in ./.env, or in %s as:\n"
         "    %s=<value>\n"
         "Or print both from the official app's APK: imcam extract-keys <app.apk>\n"
-        "See the README section \"Vendor constants\"." % (name, SETTINGS[name], paths.path("config.env"), name))
+        'See the README section "Vendor constants".'
+        % (name, SETTINGS[name], paths.path("config.env"), name)
+    )
 
 
 def require(*names):

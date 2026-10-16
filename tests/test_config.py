@@ -19,7 +19,9 @@ def test_missing_setting_has_instructions(tmp_path):
 
 def test_lookup_order(tmp_path, monkeypatch):
     (tmp_path / "home").mkdir()
-    (tmp_path / "home" / "config.env").write_text("# c\nIMCAM_VKEY=from-home\nexport IMCAM_AES_PREFIX='pre-'\n")
+    (tmp_path / "home" / "config.env").write_text(
+        "# c\nIMCAM_VKEY=from-home\nexport IMCAM_AES_PREFIX='pre-'\n"
+    )
     assert config.vkey() == "from-home" and config.aes_prefix() == "pre-"
     (tmp_path / ".env").write_text('IMCAM_VKEY="from-cwd"\n')
     assert config.vkey() == "from-cwd"

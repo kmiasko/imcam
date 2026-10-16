@@ -52,21 +52,35 @@ class Dex:
 
 def dex(vkeys=(V,), prefixes=(P,)):
     return Dex(
-        Cls("Lcom/x/biz/LoginReq;", [Method("<init>", list(vkeys) + ["com.example.app", "2.0.0"])]),
-        Cls("Lcom/x/biz/OpenLoginReq;", [Method("<init>", ["Z" * 32])]),  # other classes are ignored
-        Cls("Lcom/x/AESCipher;", [Method("<clinit>", list(prefixes)), Method("md5", ["MD5"])]),
+        Cls(
+            "Lcom/x/biz/LoginReq;",
+            [Method("<init>", list(vkeys) + ["com.example.app", "2.0.0"])],
+        ),
+        Cls(
+            "Lcom/x/biz/OpenLoginReq;", [Method("<init>", ["Z" * 32])]
+        ),  # other classes are ignored
+        Cls(
+            "Lcom/x/AESCipher;",
+            [Method("<clinit>", list(prefixes)), Method("md5", ["MD5"])],
+        ),
     )
 
 
 def test_find_keys():
-    assert extract_keys.find_keys([Dex(), dex()]) == {"IMCAM_VKEY": V, "IMCAM_AES_PREFIX": P}
+    assert extract_keys.find_keys([Dex(), dex()]) == {
+        "IMCAM_VKEY": V,
+        "IMCAM_AES_PREFIX": P,
+    }
 
 
-@pytest.mark.parametrize("d, what", [
-    (dex(vkeys=()), "vkey"),
-    (dex(prefixes=()), "AES prefix"),
-    (dex(vkeys=(V, V[::-1])), "2 different candidates"),
-])
+@pytest.mark.parametrize(
+    "d, what",
+    [
+        (dex(vkeys=()), "vkey"),
+        (dex(prefixes=()), "AES prefix"),
+        (dex(vkeys=(V, V[::-1])), "2 different candidates"),
+    ],
+)
 def test_find_keys_problems(d, what):
     with pytest.raises(SystemExit, match=what):
         extract_keys.find_keys([d])
@@ -98,15 +112,29 @@ def test_code_apks_plain_apk(tmp_path):
 def test_code_apks_xapk_skips_splits(tmp_path):
     base = _zip({"classes.dex": b"x", "classes2.dex": b"y"})
     f = tmp_path / "a.xapk"
-    f.write_bytes(_zip({"manifest.json": b"{}", "pkg.apk": base,
-                        "config.en.apk": _zip({"resources.arsc": b"r"}), "icon.png": b"p"}))
+    f.write_bytes(
+        _zip(
+            {
+                "manifest.json": b"{}",
+                "pkg.apk": base,
+                "config.en.apk": _zip({"resources.arsc": b"r"}),
+                "icon.png": b"p",
+            }
+        )
+    )
     assert extract_keys.code_apks(str(f)) == [base]
 
 
-@pytest.mark.parametrize("entries, msg", [
-    ({"config.en.apk": _zip({"resources.arsc": b"r"}), "icon.png": b"p"}, "no app code"),
-    ({"readme.txt": b"hi"}, "no app code"),
-])
+@pytest.mark.parametrize(
+    "entries, msg",
+    [
+        (
+            {"config.en.apk": _zip({"resources.arsc": b"r"}), "icon.png": b"p"},
+            "no app code",
+        ),
+        ({"readme.txt": b"hi"}, "no app code"),
+    ],
+)
 def test_code_apks_no_code(tmp_path, entries, msg):
     f = tmp_path / "a.xapk"
     f.write_bytes(_zip(entries))

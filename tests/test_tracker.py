@@ -4,7 +4,11 @@ import pytest
 from imcam import tracker
 from imcam.tracker import BgSubDetector, Health, Tracker, norm_line, line_y
 
-CFG = dict(tracker.DEFAULTS, roi=[[0.1, 0.3], [0.9, 0.3], [0.9, 0.95], [0.1, 0.95]], lying_line=0.6)
+CFG = dict(
+    tracker.DEFAULTS,
+    roi=[[0.1, 0.3], [0.9, 0.3], [0.9, 0.95], [0.1, 0.95]],
+    lying_line=0.6,
+)
 W, H = CFG["frame_w"], CFG["frame_h"]
 RNG = np.random.default_rng(1)
 
@@ -17,7 +21,7 @@ def bg(level=100, color=False):
 
 
 def blob(f, x0, y0, w, h):
-    f[y0:y0 + h, x0:x0 + w] = 220
+    f[y0 : y0 + h, x0 : x0 + w] = 220
     return f
 
 
@@ -32,7 +36,12 @@ def upright():
 class Sim:
     def __init__(self, **kw):
         self.cfg = tracker.validate_config(dict(CFG, **kw))
-        self.det, self.trk, self.t, self.events = BgSubDetector(self.cfg), Tracker(self.cfg), 0.0, []
+        self.det, self.trk, self.t, self.events = (
+            BgSubDetector(self.cfg),
+            Tracker(self.cfg),
+            0.0,
+            [],
+        )
 
     def feed(self, mk, seconds, fps=2):
         for _ in range(int(seconds * fps)):
@@ -95,7 +104,9 @@ def test_brightness_jump_resets_model_without_alert():
     s = Sim()
     s.feed(bg, 15)
     s.feed(lying, 20)
-    kinds = [s.det.analyze(blob(bg(220, True), 150, 250, 300, 50)).kind for _ in range(4)]
+    kinds = [
+        s.det.analyze(blob(bg(220, True), 150, 250, 300, 50)).kind for _ in range(4)
+    ]
     assert kinds[0] == "reset" and kinds[1:] == ["warmup"] * 3
     s.feed(lambda: blob(bg(220, True), 150, 250, 300, 50), 20)
     assert s.events == []

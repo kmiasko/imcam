@@ -8,6 +8,7 @@ Needs the optional dependency androguard (`pip install "imcam[keys]"`). Values a
 content: the `vkey` is the only 32-character alphanumeric string constant in the login request class
 (`LoginReq`), and the AES prefix is the string constant containing "prefix" in `AESCipher`.
 """
+
 import io
 import re
 import sys
@@ -48,13 +49,25 @@ def find_keys(dexes):
         vkeys |= v
         prefixes |= p
     problems = []
-    for label, found in (("vkey (a 32-character string in LoginReq)", vkeys),
-                         ("AES prefix (a \"prefix\" string in AESCipher)", prefixes)):
+    for label, found in (
+        ("vkey (a 32-character string in LoginReq)", vkeys),
+        ('AES prefix (a "prefix" string in AESCipher)', prefixes),
+    ):
         if len(found) != 1:
-            problems.append("%s: %s" % (label, "not found" if not found else "%d different candidates" % len(found)))
+            problems.append(
+                "%s: %s"
+                % (
+                    label,
+                    "not found"
+                    if not found
+                    else "%d different candidates" % len(found),
+                )
+            )
     if problems:
-        raise SystemExit("could not identify the constants (the app's layout may have changed):\n  "
-                         + "\n  ".join(problems))
+        raise SystemExit(
+            "could not identify the constants (the app's layout may have changed):\n  "
+            + "\n  ".join(problems)
+        )
     return {"IMCAM_VKEY": next(iter(vkeys)), "IMCAM_AES_PREFIX": next(iter(prefixes))}
 
 
@@ -84,26 +97,34 @@ def code_apks(path):
                 except zipfile.BadZipFile:
                     pass
     if not found:
-        raise SystemExit("no app code (classes.dex) in %s; pass the app's base APK or the XAPK" % path)
+        raise SystemExit(
+            "no app code (classes.dex) in %s; pass the app's base APK or the XAPK"
+            % path
+        )
     return found
 
 
 def _dexes(apk_path):
     try:
         from loguru import logger
+
         logger.remove()  # androguard logs every parsed XML tag at debug level
         from androguard.core.apk import APK
         from androguard.core.dex import DEX
     except ImportError:
-        raise SystemExit('extract-keys needs androguard: pip install "imcam[keys]"  '
-                         '(pipx: pipx inject imcam androguard)')
+        raise SystemExit(
+            'extract-keys needs androguard: pip install "imcam[keys]"  '
+            "(pipx: pipx inject imcam androguard)"
+        )
     for data in code_apks(apk_path):
         try:
             apk = APK(apk_path) if data is None else APK(data, raw=True)
         except Exception as e:
             raise SystemExit("cannot read %s as an APK: %s" % (apk_path, e))
         for blob in apk.get_all_dex():
-            if b"LoginReq" in blob or b"AESCipher" in blob:  # class names are in the string table: skip other dex files
+            if (
+                b"LoginReq" in blob or b"AESCipher" in blob
+            ):  # class names are in the string table: skip other dex files
                 yield DEX(blob)
 
 
@@ -111,7 +132,11 @@ def main(argv):
     if len(argv) != 1:
         raise SystemExit("usage: imcam extract-keys <app.apk|app.xapk>")
     values = find_keys(_dexes(argv[0]))
-    print("# Add these lines to the environment, to ./.env, or to %s" % paths.path("config.env"), file=sys.stderr)
+    print(
+        "# Add these lines to the environment, to ./.env, or to %s"
+        % paths.path("config.env"),
+        file=sys.stderr,
+    )
     for name in sorted(values):
         print("%s=%s" % (name, values[name]))
 

@@ -6,6 +6,7 @@ packets. ffmpeg's rtp input also binds port+1 for RTCP, so ports must be at leas
 `imcam calibrate` runs in another process; it asks for a one-frame grab on SNAP_PORT by touching SNAP_FLAG,
 and the relay (in `watch`/`monitor`) then also feeds that port while the flag is fresh.
 """
+
 import contextlib
 import os
 import socket
@@ -15,23 +16,25 @@ import time
 
 from . import debug, paths
 
-H265_PT = 125     # payload type the device answers with
+H265_PT = 125  # payload type the device answers with
 RTP_PORT = 47301  # ffplay window (watch)
 TRACK_PORT = 47304  # tracker's ffmpeg: pipe frames + recording
-SNAP_PORT = 47306   # calibrate's one-frame grab
+SNAP_PORT = 47306  # calibrate's one-frame grab
 LIVE_SDP = paths.path("live.sdp")
 TRACK_SDP = paths.path("track.sdp")
 SNAP_SDP = paths.path("snap.sdp")
 SNAP_FLAG = paths.path("snap.want")
-SNAP_FLAG_TTL_S = 120   # a flag older than this is stale (calibrate died)
-SNAP_POLL_S = 1.0       # how often the relay re-checks the flag
+SNAP_FLAG_TTL_S = 120  # a flag older than this is stale (calibrate died)
+SNAP_POLL_S = 1.0  # how often the relay re-checks the flag
 PLI_EVERY_S = 5.0
 
 
 def write_sdp(path, port):
     """SDP file describing the H.265 RTP forwarded to `port`; returns path."""
-    sdp = ("v=0\no=- 0 0 IN IP4 127.0.0.1\ns=ImCam\nc=IN IP4 127.0.0.1\nt=0 0\n"
-           "m=video %d RTP/AVP %d\na=rtpmap:%d H265/90000\n" % (port, H265_PT, H265_PT))
+    sdp = (
+        "v=0\no=- 0 0 IN IP4 127.0.0.1\ns=ImCam\nc=IN IP4 127.0.0.1\nt=0 0\n"
+        "m=video %d RTP/AVP %d\na=rtpmap:%d H265/90000\n" % (port, H265_PT, H265_PT)
+    )
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(sdp)
@@ -41,12 +44,25 @@ def write_sdp(path, port):
 def start_ffplay():
     path = write_sdp(LIVE_SDP, RTP_PORT)
     return subprocess.Popen(
-        [paths.require_tool("ffplay"), "-loglevel", "error", "-window_title", "ImCam", "-fflags", "nobuffer",
-         "-protocol_whitelist", "file,udp,rtp", "-i", path])
+        [
+            paths.require_tool("ffplay"),
+            "-loglevel",
+            "error",
+            "-window_title",
+            "ImCam",
+            "-fflags",
+            "nobuffer",
+            "-protocol_whitelist",
+            "file,udp,rtp",
+            "-i",
+            path,
+        ]
+    )
 
 
 class SnapshotFlag:
     """Cross-process request for a snapshot feed: calibrate holds the flag, the relay polls it."""
+
     def __init__(self, path=None, mono=time.monotonic, wall=time.time):
         self.path, self.mono, self.wall = path or SNAP_FLAG, mono, wall
         self._checked, self._wanted = -SNAP_POLL_S - 1, False
@@ -56,7 +72,9 @@ class SnapshotFlag:
         if now - self._checked > SNAP_POLL_S:
             self._checked = now
             try:
-                self._wanted = self.wall() - os.path.getmtime(self.path) < SNAP_FLAG_TTL_S
+                self._wanted = (
+                    self.wall() - os.path.getmtime(self.path) < SNAP_FLAG_TTL_S
+                )
             except OSError:
                 self._wanted = False
         return self._wanted
@@ -75,6 +93,7 @@ class SnapshotFlag:
 class Relay:
     """Copies H.265 RTP packets to the consumers' ports. on_rtp() returns the SSRC to send a keyframe
     request (PLI) for when one is due, else None; the caller sends it."""
+
     def __init__(self, ports, send=None, snapshot=None, mono=time.monotonic, log=print):
         self.ports = tuple(ports)
         self.snapshot = snapshot or SnapshotFlag()
@@ -118,7 +137,11 @@ def install(ports):
     from aiortc.rtcdtlstransport import RTCDtlsTransport
     from aiortc.rtp import RTCP_PSFB_PLI, RtcpPsfbPacket
 
-    CODECS["video"].append(RTCRtpCodecParameters(mimeType="video/H265", clockRate=90000, payloadType=H265_PT))
+    CODECS["video"].append(
+        RTCRtpCodecParameters(
+            mimeType="video/H265", clockRate=90000, payloadType=H265_PT
+        )
+    )
     relay = Relay(ports)
     orig = RTCDtlsTransport._handle_rtp_data
 
@@ -126,7 +149,13 @@ def install(ports):
         ssrc = relay.on_rtp(data)
         if relay.is_h265(data):
             if ssrc is not None:
-                await self._send_rtp(bytes(RtcpPsfbPacket(fmt=RTCP_PSFB_PLI, ssrc=0, media_ssrc=ssrc, fci=b"")))
+                await self._send_rtp(
+                    bytes(
+                        RtcpPsfbPacket(
+                            fmt=RTCP_PSFB_PLI, ssrc=0, media_ssrc=ssrc, fci=b""
+                        )
+                    )
+                )
             return
         await orig(self, data, arrival_time_ms)
 

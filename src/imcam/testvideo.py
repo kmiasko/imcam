@@ -1,5 +1,6 @@
 """Test video for the call: the device only streams after the viewer sends video of its own, so we encode a moving
 pattern with libx265 and write its RTP through the aiortc sender's DTLS/SRTP transport."""
+
 import asyncio
 import random
 import time
@@ -39,7 +40,7 @@ def h265_packetize(nals, mtu=1200):
         ntype, body = (nal[0] >> 1) & 0x3F, nal[2:]
         step = mtu - 3
         for off in range(0, len(body), step):
-            chunk = body[off:off + step]
+            chunk = body[off : off + step]
             end = off + step >= len(body)
             fu = (0x80 if off == 0 else 0) | (0x40 if end else 0) | ntype
             out.append((hdr + bytes([fu]) + chunk, last_nal and end))
@@ -59,8 +60,12 @@ async def send_test_video(sender, w=640, h=360, fps=15):
     enc.time_base = Fraction(1, 90000)
     enc.gop_size = fps
     enc.max_b_frames = 0
-    enc.options = {"preset": "ultrafast", "tune": "zerolatency",
-                   "x265-params": "repeat-headers=1:annexb=1:keyint=%d:bframes=0:log-level=none" % fps}
+    enc.options = {
+        "preset": "ultrafast",
+        "tune": "zerolatency",
+        "x265-params": "repeat-headers=1:annexb=1:keyint=%d:bframes=0:log-level=none"
+        % fps,
+    }
     seq, ts0, i = random.randrange(1 << 16), random.randrange(1 << 32), 0
     nxt = time.monotonic()
     while True:
@@ -73,8 +78,13 @@ async def send_test_video(sender, w=640, h=360, fps=15):
         i += 1
         for pkt in enc.encode(frame):
             for payload, marker in h265_packetize(split_annexb(bytes(pkt))):
-                rtp = RtpPacket(payload_type=relay.H265_PT, sequence_number=seq, timestamp=(ts0 + pkt.pts) & 0xFFFFFFFF,
-                                ssrc=sender._ssrc, payload=payload)
+                rtp = RtpPacket(
+                    payload_type=relay.H265_PT,
+                    sequence_number=seq,
+                    timestamp=(ts0 + pkt.pts) & 0xFFFFFFFF,
+                    ssrc=sender._ssrc,
+                    payload=payload,
+                )
                 rtp.marker = int(marker)
                 seq = (seq + 1) & 0xFFFF
                 await dtls._send_rtp(rtp.serialize())

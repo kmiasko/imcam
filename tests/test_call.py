@@ -6,10 +6,12 @@ import pytest
 
 from imcam import call
 
-LOCAL_SDP = ("v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 125\r\na=mid:0\r\n"
-             "a=candidate:1 1 udp 2130706431 192.168.1.2 5000 typ host\r\n"
-             "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\n"
-             "a=candidate:2 1 udp 2130706431 192.168.1.2 5002 typ host\r\n")
+LOCAL_SDP = (
+    "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 125\r\na=mid:0\r\n"
+    "a=candidate:1 1 udp 2130706431 192.168.1.2 5000 typ host\r\n"
+    "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\n"
+    "a=candidate:2 1 udp 2130706431 192.168.1.2 5002 typ host\r\n"
+)
 
 
 class FakeSig:
@@ -30,8 +32,14 @@ class FakeSig:
 
 class FakePeer:
     """Scripted stand-in for AiortcPeer: records calls, connects instantly."""
+
     def __init__(self):
-        self.answer, self.candidates, self.closed, self.reported = None, [], False, False
+        self.answer, self.candidates, self.closed, self.reported = (
+            None,
+            [],
+            False,
+            False,
+        )
         self.video_started = False
 
     async def offer(self):
@@ -60,11 +68,19 @@ def msg(message_type, **fields):
 
 
 def answer(sdp="v=0 answer", **fields):
-    return msg("callResponse", message=json.dumps(dict({"type": "answer", "sdp": sdp}, **fields)))
+    return msg(
+        "callResponse",
+        message=json.dumps(dict({"type": "answer", "sdp": sdp}, **fields)),
+    )
 
 
 def candidate(n):
-    return msg("remoteCandidate", message=json.dumps({"sdpMid": "0", "sdpMLineIndex": 0, "candidate": "candidate:%d" % n}))
+    return msg(
+        "remoteCandidate",
+        message=json.dumps(
+            {"sdpMid": "0", "sdpMLineIndex": 0, "candidate": "candidate:%d" % n}
+        ),
+    )
 
 
 def run(script, peer=None, sig=None, answer_timeout=5):
@@ -78,29 +94,67 @@ def run(script, peer=None, sig=None, answer_timeout=5):
             for item in script:
                 await asyncio.sleep(0.01)
                 inbox.put_nowait(item)
+
         feeder = asyncio.create_task(feed())
-        reason = await asyncio.wait_for(call.run_call(sig, inbox, peer, 7, "SER", "PERMIT", munge=lambda s: "M:" + s,
-                                                    answer_timeout=answer_timeout), 10)
+        reason = await asyncio.wait_for(
+            call.run_call(
+                sig,
+                inbox,
+                peer,
+                7,
+                "SER",
+                "PERMIT",
+                munge=lambda s: "M:" + s,
+                answer_timeout=answer_timeout,
+            ),
+            10,
+        )
         await feeder
         return reason
+
     return asyncio.run(main()), sig, peer
 
 
 def test_call_request_carries_the_munged_offer_then_each_local_candidate():
     _, sig, _ = run([None])
     first = sig.sent[0]
-    assert first["messageType"] == "callRequest" and first["sid"] == 7 and first["toSerialCode"] == "SER"
-    assert first["permitCode"] == "PERMIT" and first["toSid"] == -1 and first["callType"] == 0
+    assert (
+        first["messageType"] == "callRequest"
+        and first["sid"] == 7
+        and first["toSerialCode"] == "SER"
+    )
+    assert (
+        first["permitCode"] == "PERMIT"
+        and first["toSid"] == -1
+        and first["callType"] == 0
+    )
     assert json.loads(first["message"]) == {"type": "offer", "sdp": "M:" + LOCAL_SDP}
     cands = [json.loads(m["message"]) for m in sig.of("remoteCandidate")]
-    assert cands == [{"sdpMid": "0", "sdpMLineIndex": 0, "candidate": "candidate:1 1 udp 2130706431 192.168.1.2 5000 typ host"},
-                     {"sdpMid": "1", "sdpMLineIndex": 1, "candidate": "candidate:2 1 udp 2130706431 192.168.1.2 5002 typ host"}]
+    assert cands == [
+        {
+            "sdpMid": "0",
+            "sdpMLineIndex": 0,
+            "candidate": "candidate:1 1 udp 2130706431 192.168.1.2 5000 typ host",
+        },
+        {
+            "sdpMid": "1",
+            "sdpMLineIndex": 1,
+            "candidate": "candidate:2 1 udp 2130706431 192.168.1.2 5002 typ host",
+        },
+    ]
 
 
 def test_answer_is_accepted_then_audio_is_switched_and_video_requested_once_connected():
     reason, sig, peer = run([answer("v=0 theirs"), msg("hangup")])
     assert reason == "hangup" and peer.answer == "v=0 theirs" and peer.video_started
-    assert sig.types() == ["callRequest", "remoteCandidate", "remoteCandidate", "switchAudio", "switchVideo", "hangup"]
+    assert sig.types() == [
+        "callRequest",
+        "remoteCandidate",
+        "remoteCandidate",
+        "switchAudio",
+        "switchVideo",
+        "hangup",
+    ]
     assert json.loads(sig.of("switchVideo")[0]["message"]) == {"type": 2, "act": 0}
     assert json.loads(sig.of("switchAudio")[0]["message"]) == {"type": 0, "act": 0}
 
@@ -141,24 +195,39 @@ def test_the_call_waits_without_a_timeout_once_answered():
     async def main():
         peer, sig, inbox = FakePeer(), FakeSig(), asyncio.Queue()
         inbox.put_nowait(answer())
-        task = asyncio.create_task(call.run_call(sig, inbox, peer, 7, "S", "P", munge=str, answer_timeout=0.05))
+        task = asyncio.create_task(
+            call.run_call(sig, inbox, peer, 7, "S", "P", munge=str, answer_timeout=0.05)
+        )
         await asyncio.sleep(0.3)  # well past answer_timeout
         assert not task.done()
         inbox.put_nowait(msg("hangup"))
         return await asyncio.wait_for(task, 5)
+
     assert asyncio.run(main()) == "hangup"
 
 
 def test_other_signaling_is_ignored(capsys):
-    reason, _, peer = run([{"opcode": "notice", "x": 1}, msg("somethingNew"), answer(), msg("hangup")])
+    reason, _, peer = run(
+        [{"opcode": "notice", "x": 1}, msg("somethingNew"), answer(), msg("hangup")]
+    )
     assert reason == "hangup" and peer.answer
     assert "somethingNew" in capsys.readouterr().out
 
 
 def test_every_exit_hangs_up_stops_signaling_and_closes_the_peer():
-    for script in ([None], [msg("callResponse", code=1)], [answer(), msg("hangup")], []):
+    for script in (
+        [None],
+        [msg("callResponse", code=1)],
+        [answer(), msg("hangup")],
+        [],
+    ):
         reason, sig, peer = run(script, answer_timeout=0.05)
-        assert sig.types()[-1] == "hangup" and sig.stop.is_set() and peer.closed and peer.reported
+        assert (
+            sig.types()[-1] == "hangup"
+            and sig.stop.is_set()
+            and peer.closed
+            and peer.reported
+        )
 
 
 def test_a_dead_signaling_socket_does_not_stop_cleanup():
@@ -170,6 +239,7 @@ def test_exceptions_from_the_peer_still_clean_up():
     class Broken(FakePeer):
         async def accept_answer(self, sdp):
             raise RuntimeError("bad sdp")
+
     peer, sig = Broken(), FakeSig()
     with pytest.raises(RuntimeError, match="bad sdp"):
         run([answer()], peer=peer, sig=sig)
@@ -178,9 +248,15 @@ def test_exceptions_from_the_peer_still_clean_up():
 
 # --- message and SDP helpers ---
 
+
 def test_call_msg_has_the_field_set_the_server_expects():
     m = call._call_msg(5, "SER", "PERMIT", "switchAudio", "{}")
-    assert m["opcode"] == "message" and m["toSid"] == -1 and m["serialCode"] == "" and m["message"] == "{}"
+    assert (
+        m["opcode"] == "message"
+        and m["toSid"] == -1
+        and m["serialCode"] == ""
+        and m["message"] == "{}"
+    )
     assert m["reqId"].startswith("a_sig_py_") and "callType" not in m
     assert call._call_msg(5, "S", "P", "callRequest")["videoCodecType"] == 0
 
@@ -188,12 +264,16 @@ def test_call_msg_has_the_field_set_the_server_expects():
 def test_local_candidates_carry_their_media_section():
     out = call._local_candidates(LOCAL_SDP)
     assert [(c["sdpMid"], c["sdpMLineIndex"]) for c in out] == [("0", 0), ("1", 1)]
-    assert out[0]["candidate"].startswith("candidate:1 ") and not out[0]["candidate"].startswith("a=")
+    assert out[0]["candidate"].startswith("candidate:1 ") and not out[0][
+        "candidate"
+    ].startswith("a=")
 
 
 def test_remote_candidate_parses_the_servers_message_and_ignores_empty_ones():
     line = "candidate:9 1 udp 2130706431 10.0.0.5 6000 typ host"
-    c = call._remote_candidate({"message": json.dumps({"candidate": line, "sdpMid": "0", "sdpMLineIndex": 0})})
+    c = call._remote_candidate(
+        {"message": json.dumps({"candidate": line, "sdpMid": "0", "sdpMLineIndex": 0})}
+    )
     assert (c.ip, c.port, c.sdpMid, c.sdpMLineIndex) == ("10.0.0.5", 6000, "0", 0)
     assert call._remote_candidate({"message": json.dumps({"candidate": ""})}) is None
     assert call._remote_candidate({}) is None
@@ -201,10 +281,14 @@ def test_remote_candidate_parses_the_servers_message_and_ignores_empty_ones():
 
 def test_offer_template_gets_only_our_ice_credentials_and_fingerprint(tmp_path):
     template = tmp_path / "t.sdp"
-    template.write_text("v=0\na=ice-ufrag:APP\na=ice-pwd:APPPW\na=fingerprint:sha-256 APP\nm=video 9\na=mid:0\n")
+    template.write_text(
+        "v=0\na=ice-ufrag:APP\na=ice-pwd:APPPW\na=fingerprint:sha-256 APP\nm=video 9\na=mid:0\n"
+    )
     ours = "v=0\r\na=ice-ufrag:US\r\na=ice-pwd:USPW\r\na=fingerprint:sha-256 US\r\nm=video 9\r\n"
     out = call._offer_from_template(ours, str(template))
-    assert out == ("v=0\r\na=ice-ufrag:US\r\na=ice-pwd:USPW\r\na=fingerprint:sha-256 US\r\nm=video 9\r\na=mid:0\r\n")
+    assert out == (
+        "v=0\r\na=ice-ufrag:US\r\na=ice-pwd:USPW\r\na=fingerprint:sha-256 US\r\nm=video 9\r\na=mid:0\r\n"
+    )
 
 
 def test_aiortc_peer_offers_video_first_then_audio_and_closes_cleanly():
@@ -214,6 +298,7 @@ def test_aiortc_peer_offers_video_first_then_audio_and_closes_cleanly():
             return await peer.offer()
         finally:
             await peer.close()
+
     sdp = asyncio.run(main())
     assert sdp.index("m=video") < sdp.index("m=audio")
     assert "a=ice-ufrag:" in sdp and "a=fingerprint:" in sdp

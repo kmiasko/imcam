@@ -1,4 +1,5 @@
 """RFC 6455 WebSocket client pieces: URL parsing, handshake, frame encode/decode (blocking sockets, no deps)."""
+
 import base64
 import os
 import socket
@@ -19,7 +20,7 @@ def parse_url(u):
         port = 443 if secure else 80
     path = "/" + path
     # the server expects an http(s)-style Origin: the URL with its ws scheme replaced by http
-    origin = "http" + u[u.index(":"):]
+    origin = "http" + u[u.index(":") :]
     return host, port, path, secure, origin
 
 
@@ -30,10 +31,12 @@ def ws_handshake(url, timeout=10):
     if secure:
         sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
     key = base64.b64encode(os.urandom(16)).decode()
-    req = ("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\n"
-           "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-           "Sec-WebSocket-Version: 13\r\nOrigin: %s\r\n\r\n"
-           % (path, host, port, key, origin))
+    req = (
+        "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+        "Sec-WebSocket-Version: 13\r\nOrigin: %s\r\n\r\n"
+        % (path, host, port, key, origin)
+    )
     sock.sendall(req.encode())
     buf = b""
     while not buf.endswith(b"\r\n\r\n"):
@@ -66,6 +69,7 @@ def frame_encode(opcode, payload):
 
 def parse_frame(buf, sock):
     """Decode one complete frame from buf, refilling from sock if needed."""
+
     def more(n):
         nonlocal buf
         while len(buf) < n:
@@ -73,6 +77,7 @@ def parse_frame(buf, sock):
             if not c:
                 raise ConnectionError("closed mid-frame")
             buf += c
+
     if len(buf) < 2:
         more(2)
     opcode = buf[0] & 0x0F
@@ -90,10 +95,10 @@ def parse_frame(buf, sock):
     more(2 + extra + (4 if masked else 0) + ln)
     off = 2 + extra
     if masked:
-        mask = buf[off:off + 4]
+        mask = buf[off : off + 4]
         off += 4
-        payload = buf[off:off + ln]
+        payload = buf[off : off + ln]
         payload = bytes(c ^ mask[i % 4] for i, c in enumerate(payload))
     else:
-        payload = buf[off:off + ln]
-    return opcode, payload, buf[off + ln:]
+        payload = buf[off : off + ln]
+    return opcode, payload, buf[off + ln :]
