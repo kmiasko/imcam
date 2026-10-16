@@ -267,13 +267,28 @@ def ffmpeg_cmd(cfg, record_dir=None, pipe=True):
     return cmd
 
 
-def pipe_frames(cfg, record_dir, stop):
-    """(monotonic ts, frame) from one ffmpeg reading the RTP forward; restarted if it exits."""
+def stop_process(proc, grace=5):
+    """End an ffmpeg child gracefully: SIGTERM lets it finish its output (a recording gets its trailer), and
+    reading its stdout until EOF keeps it from blocking on a full pipe. Kills it after `grace` seconds."""
+    if proc.poll() is None:
+        proc.terminate()
+    try:
+        proc.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+
+
+def pipe_frames(cfg, record_dir, stop, on_proc=None):
+    """(monotonic ts, frame) from one ffmpeg reading the RTP forward; restarted if it exits.
+    on_proc(proc) is told about each ffmpeg started, so a caller can end it to unblock the read."""
     import numpy as np
     w, h = cfg["frame_w"], cfg["frame_h"]
     n = w * h * 3
     while not stop.is_set():
         proc = subprocess.Popen(ffmpeg_cmd(cfg, record_dir), stdout=subprocess.PIPE)
+        if on_proc:
+            on_proc(proc)
         try:
             while not stop.is_set():
                 buf = proc.stdout.read(n)
@@ -281,8 +296,7 @@ def pipe_frames(cfg, record_dir, stop):
                     break
                 yield time.monotonic(), np.frombuffer(buf, np.uint8).reshape(h, w, 3)
         finally:
-            proc.kill()
-            proc.wait()
+            stop_process(proc)
         if not stop.wait(2):
             print("ffmpeg exited, restarting", file=sys.stderr)
 
@@ -333,23 +347,33 @@ def run(frames, cfg, deliver, live):
 
 
 class LiveTracker:
-    """Background tracking (and/or recording) of the RTP forward; stop() ends it."""
+    """Background tracking (and/or recording) of the RTP forward; stop() ends it and waits for ffmpeg."""
     def __init__(self, record_dir=None, track=True):
         self.stop_ev = threading.Event()
-        self.proc = None
+        self.proc = self.thread = None
         cfg = load_config() if track else dict(DEFAULTS)
         if track:
             self.thread = threading.Thread(
-                target=run, args=(pipe_frames(cfg, record_dir, self.stop_ev), cfg, notify.make_notifier(cfg), True),
+                target=run, args=(pipe_frames(cfg, record_dir, self.stop_ev, self._on_proc), cfg,
+                                  notify.make_notifier(cfg), True),
                 daemon=True)
             self.thread.start()
         else:  # recording only
             self.proc = subprocess.Popen(ffmpeg_cmd(cfg, record_dir, pipe=False))
 
-    def stop(self):
+    def _on_proc(self, proc):
+        self.proc = proc
+
+    def stop(self, timeout=10):
+        """Returns after ffmpeg has exited, so nothing it prints or writes outlives the program."""
         self.stop_ev.set()
-        if self.proc:
-            self.proc.terminate()
+        proc = self.proc
+        if self.thread:  # the tracking thread owns ffmpeg's pipe: end ffmpeg, then let the thread wind down
+            if proc and proc.poll() is None:
+                proc.terminate()
+            self.thread.join(timeout)
+        elif proc:
+            stop_process(proc, grace=timeout)
 
 
 def run_file(path):
