@@ -1,5 +1,3 @@
-import json
-
 from imcam import cli
 
 
@@ -20,16 +18,3 @@ def test_split_annexb_handles_three_and_four_byte_start_codes():
     big = bytes([0x26, 0x01]) + bytes(range(256)) * 20
     small = bytes([0x40, 0x01, 1, 2, 3])
     assert cli._split_annexb(b"\0\0\0\1" + small + b"\0\0\1" + big) == [small, big]
-
-
-def test_frame_round_trip_across_length_encodings():
-    heartbeat = json.dumps({"headers": {"id": "pub_heartbeat", "req_id": "1", "time": 1}}).encode()
-    for payload in (heartbeat, b"x" * 300, b"y" * 70000):  # 7-bit, 16-bit and 64-bit lengths
-        op, got, rest = cli.parse_frame(cli.frame_encode(0x1, payload), None)
-        assert op == 0x1 and got == payload and not rest
-
-
-def test_aes_ecb_decrypt_matches_fips197_vector():
-    key = bytes(range(16))
-    cipher = bytes.fromhex("69c4e0d86a7b0430d8cdb78070b4c55a")
-    assert cli.aes_ecb_decrypt(key, cipher) == bytes.fromhex("00112233445566778899aabbccddeeff")

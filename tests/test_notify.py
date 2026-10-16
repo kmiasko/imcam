@@ -1,5 +1,3 @@
-import os
-
 from imcam import notify
 
 

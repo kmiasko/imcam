@@ -1,6 +1,6 @@
 import pytest
 
-from imcam import cli, config
+from imcam import cloud, config
 
 
 @pytest.fixture(autouse=True)
@@ -29,4 +29,4 @@ def test_lookup_order(tmp_path, monkeypatch):
 
 def test_login_body_uses_config(monkeypatch):
     monkeypatch.setenv("IMCAM_VKEY", "k")
-    assert cli.login_body("a", "b")["vkey"] == "k"
+    assert cloud.login_body("a", "b")["vkey"] == "k"
