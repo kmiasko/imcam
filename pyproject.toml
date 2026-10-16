@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imcam"
+version = "0.1.0"
+description = "Unofficial Linux/Windows client for ImCam (com.cylan.chatcam) cameras, with baby-awake tracking"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Krzysztof Miąsko" }]
+dependencies = [
+    "aiortc>=1.9",
+    "av>=12",
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "winotify>=1.1; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+keys = ["androguard>=4"]
+
+[project.scripts]
+imcam = "imcam.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
