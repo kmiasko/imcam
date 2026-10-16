@@ -15,30 +15,9 @@ import sys
 import threading
 import time
 
-from . import notify, paths
+from . import notify, paths, relay
 
 CONFIG_FILE = paths.path("roi.json")
-H265_PT = 125
-# cli.py forwards each RTP packet to the ports below, one reader each. ffmpeg's rtp input also binds
-# port+1 for RTCP, so ports must be at least 2 apart (ffplay in cli.py: 47301 + 47302)
-TRACK_PORT = 47304  # tracker's ffmpeg (pipe frames + recording)
-SNAP_PORT = 47306   # calibrate's one-frame grab
-TRACK_SDP = paths.path("track.sdp")
-SNAP_SDP = paths.path("snap.sdp")
-SNAP_FLAG = paths.path("snap.want")  # touched by calibrate; forwarder then also feeds SNAP_PORT
-
-
-def write_sdp(path, port, pt=H265_PT):
-    sdp = ("v=0\no=- 0 0 IN IP4 127.0.0.1\ns=ImCam\nc=IN IP4 127.0.0.1\nt=0 0\n"
-           "m=video %d RTP/AVP %d\na=rtpmap:%d H265/90000\n" % (port, pt, pt))
-    return write_raw_sdp(path, sdp)
-
-
-def write_raw_sdp(path, sdp):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(sdp)
-    return path
 
 DEFAULTS = {
     "roi": None,                # [[x, y], ...] crib polygon, normalized
@@ -276,7 +255,7 @@ def ffmpeg_cmd(cfg, record_dir=None, pipe=True):
            "-protocol_whitelist", "file,udp,rtp"]
     if cfg.get("hwaccel"):
         cmd += ["-hwaccel", cfg["hwaccel"]]
-    cmd += ["-i", write_sdp(TRACK_SDP, TRACK_PORT)]
+    cmd += ["-i", relay.write_sdp(relay.TRACK_SDP, relay.TRACK_PORT)]
     if record_dir:
         os.makedirs(record_dir, exist_ok=True)
         cmd += ["-map", "0:v", "-c", "copy", "-f", "segment", "-segment_time", "600",
@@ -384,18 +363,13 @@ def snapshot_live():
     import cv2
     import numpy as np
     cmd = [paths.require_tool("ffmpeg"), "-loglevel", "error", "-protocol_whitelist", "file,udp,rtp",
-           "-skip_frame", "nokey", "-i", write_sdp(SNAP_SDP, SNAP_PORT),
+           "-skip_frame", "nokey", "-i", relay.write_sdp(relay.SNAP_SDP, relay.SNAP_PORT),
            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]
-    open(SNAP_FLAG, "w").close()
     try:
-        out = subprocess.run(cmd, stdout=subprocess.PIPE, timeout=40).stdout
+        with relay.SnapshotFlag().request():
+            out = subprocess.run(cmd, stdout=subprocess.PIPE, timeout=40).stdout
     except subprocess.TimeoutExpired:
         out = b""
-    finally:
-        try:
-            os.unlink(SNAP_FLAG)
-        except OSError:
-            pass
     img = cv2.imdecode(np.frombuffer(out, np.uint8), cv2.IMREAD_COLOR) if out else None
     if img is None:
         raise SystemExit("no frame from the live stream; run `imcam watch` or `monitor` first")

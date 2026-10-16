@@ -35,13 +35,12 @@ import re
 import socket
 import ssl
 import struct
-import subprocess
 import sys
 import threading
 import time
 import uuid
 
-from . import config, extract_keys, extract_offer, paths, tracker  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
+from . import config, debug, extract_keys, extract_offer, paths, relay, tracker  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
 from fractions import Fraction
 
 DEFAULT_URL = "wss://fast.jfgou.com:443/fast"
@@ -538,112 +537,6 @@ class _Signal:
         threading.Thread(target=self._heartbeat, daemon=True).start()
 
 
-H265_PT = 125  # payload type the device answers with
-RTP_PORT = 47301  # local UDP port where the H.265 RTP stream is handed to ffplay
-# Each UDP port has one reader, and sending to a port nobody reads broke playback: only active readers get packets
-
-
-def _enable_h265_forwarding(ports):
-    """aiortc has no H.265 codec. Advertise H.265 in the offer, and copy each decrypted
-    H.265 RTP packet to RTP_PORT, where ffplay reads it through an SDP file."""
-    from aiortc import RTCRtpCodecParameters
-    from aiortc.codecs import CODECS
-    from aiortc.rtcdtlstransport import RTCDtlsTransport
-
-    CODECS["video"].append(RTCRtpCodecParameters(mimeType="video/H265", clockRate=90000, payloadType=H265_PT))
-    fwd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    orig = RTCDtlsTransport._handle_rtp_data
-
-    seen, last_pli = [0], [0.0]
-    snap = [0.0, False]  # last check time, calibrate waiting
-
-    def targets():
-        now = time.monotonic()
-        if now - snap[0] > 1:
-            snap[0] = now
-            try:
-                snap[1] = time.time() - os.path.getmtime(tracker.SNAP_FLAG) < 120
-            except OSError:
-                snap[1] = False
-        return list(ports) + [tracker.SNAP_PORT] if snap[1] else ports
-
-    async def handle(self, data, arrival_time_ms):
-        if os.environ.get("IMCAM_DEBUG") and len(data) > 1:
-            print("rtp in: pt=%d len=%d" % (data[1] & 0x7F, len(data)))
-        if len(data) > 1 and data[1] & 0x7F == H265_PT:
-            if seen[0] % 500 == 0:
-                print("receiving H.265 video (%d packets so far)" % seen[0])
-            seen[0] += 1
-            if os.environ.get("IMCAM_DEBUG"):
-                try:
-                    hl = 12 + (data[0] & 0x0F) * 4
-                    if data[0] & 0x10:
-                        hl += 4 + 4 * struct.unpack("!H", data[hl + 2:hl + 4])[0]
-                    nt = (data[hl] >> 1) & 0x3F
-                    if nt == 49:
-                        nt = "fu%d" % (data[hl + 2] & 0x3F) if data[hl + 2] & 0x80 else None
-                    if nt is not None:
-                        print("nal in:", nt)
-                except Exception as e:
-                    print("nal parse error: %r" % e)
-            for port in targets():
-                fwd.sendto(data, ("127.0.0.1", port))
-            # aiortc can't decode H.265, so the receiver never sees these packets. Ask the camera for
-            # a keyframe (PLI) now and every 5 s so ffplay can start decoding from an IDR.
-            now = time.monotonic()
-            if now - last_pli[0] > 5:
-                last_pli[0] = now
-                if os.environ.get("IMCAM_DEBUG"):
-                    print("PLI sent")
-                from aiortc.rtp import RtcpPsfbPacket, RTCP_PSFB_PLI
-                ssrc = struct.unpack("!I", data[8:12])[0]
-                await self._send_rtp(bytes(RtcpPsfbPacket(fmt=RTCP_PSFB_PLI, ssrc=0, media_ssrc=ssrc, fci=b"")))
-            return
-        await orig(self, data, arrival_time_ms)
-
-    RTCDtlsTransport._handle_rtp_data = handle
-    if os.environ.get("IMCAM_DEBUG"):
-        import collections
-        from aioice.ice import StunProtocol
-        cnt = collections.Counter()
-        orig_rx = StunProtocol.datagram_received
-
-        def rx(self, data, addr):
-            if isinstance(data, bytes) and data:
-                k = "stun" if data[0] < 4 else "dtls" if 20 <= data[0] < 64 else "rtp/rtcp" if data[0] >= 128 else "other"
-                cnt["rx %s from %s" % (k, addr[0])] += 1
-            orig_rx(self, data, addr)
-
-        StunProtocol.datagram_received = rx
-        import atexit
-        atexit.register(lambda: print("datagram counts:", dict(cnt)))
-    if os.environ.get("IMCAM_DEBUG"):
-        orig_rtcp = RTCDtlsTransport._handle_rtcp_data
-
-        async def handle_rtcp(self, data):
-            from aiortc.rtp import RtcpPacket
-            try:
-                print("rtcp in: %s" % [type(x).__name__ for x in RtcpPacket.parse(data)])
-            except ValueError:
-                print("rtcp in: unparsable len=%d" % len(data))
-            await orig_rtcp(self, data)
-
-        RTCDtlsTransport._handle_rtcp_data = handle_rtcp
-
-
-def _write_sdp():
-    sdp = ("v=0\no=- 0 0 IN IP4 127.0.0.1\ns=ImCam\nc=IN IP4 127.0.0.1\nt=0 0\n"
-           "m=video %d RTP/AVP %d\na=rtpmap:%d H265/90000\n" % (RTP_PORT, H265_PT, H265_PT))
-    return tracker.write_raw_sdp(paths.path("live.sdp"), sdp)
-
-
-def _start_ffplay():
-    path = _write_sdp()
-    return subprocess.Popen(
-        [paths.require_tool("ffplay"), "-loglevel", "error", "-window_title", "ImCam", "-fflags", "nobuffer",
-         "-protocol_whitelist", "file,udp,rtp", "-i", path])
-
-
 def _split_annexb(data):
     """NAL units (without start codes) of an Annex-B byte stream."""
     nals, i, n = [], 0, len(data)
@@ -709,7 +602,7 @@ async def _send_h265_test_video(sender, w=640, h=360, fps=15):
         i += 1
         for pkt in enc.encode(frame):
             for payload, marker in h265_packetize(_split_annexb(bytes(pkt))):
-                rtp = RtpPacket(payload_type=H265_PT, sequence_number=seq, timestamp=(ts0 + pkt.pts) & 0xFFFFFFFF,
+                rtp = RtpPacket(payload_type=relay.H265_PT, sequence_number=seq, timestamp=(ts0 + pkt.pts) & 0xFFFFFFFF,
                                 ssrc=sender._ssrc, payload=payload)
                 rtp.marker = int(marker)
                 seq = (seq + 1) & 0xFFFF
@@ -816,8 +709,7 @@ async def _watch_async(sock, buf, sid, serial, permit, rsp):
                 if not ans.get("sdp") or ans.get("type") == "exceed":
                     print("device refused call: %s" % ans, file=sys.stderr)
                     break
-                if os.environ.get("IMCAM_DEBUG"):
-                    print("--- offer\n%s\n--- answer\n%s" % (pc.localDescription.sdp, ans["sdp"]))
+                debug.offer_and_answer(pc.localDescription.sdp, ans["sdp"])
                 await pc.setRemoteDescription(RTCSessionDescription(sdp=ans["sdp"], type="answer"))
                 answered = True
                 print("answer received, connecting ...")
@@ -844,10 +736,7 @@ async def _watch_async(sock, buf, sid, serial, permit, rsp):
     finally:
         if video_task:
             video_task.cancel()
-        if os.environ.get("IMCAM_DEBUG"):
-            for st in (await pc.getStats()).values():
-                if st.type == "transport":
-                    print("dtls stats: sent=%d recv=%d" % (st.packetsSent, st.packetsReceived))
+        await debug.dtls_stats(pc)
         try:
             sig.send(_call_msg(sid, serial, permit, "hangup"))
         except OSError:
@@ -910,8 +799,8 @@ def do_watch(c, serial, permit, track=False, record=None):
     and show the incoming video in ffplay until Ctrl-C. Needs aiortc (~/.imcam/venv).
     --track / --record also feed the stream to tracker.py's ffmpeg."""
     offer_template_path()  # fail before opening any window
-    _enable_h265_forwarding((RTP_PORT,) + ((tracker.TRACK_PORT,) if record or track else ()))
-    player = _start_ffplay()
+    relay.install((relay.RTP_PORT,) + ((relay.TRACK_PORT,) if record or track else ()))
+    player = relay.start_ffplay()
     live = _start_tracker(record, track)
     try:
         _call_once(c, serial, permit)
@@ -933,7 +822,7 @@ def _start_tracker(record, track):
 def do_monitor(c, serial, permit, record=None):
     """Headless: no ffplay, tracking on, reconnects forever with exponential backoff (cap 30 s)."""
     offer_template_path()  # fail before connecting
-    _enable_h265_forwarding((tracker.TRACK_PORT,))
+    relay.install((relay.TRACK_PORT,))
     live = _start_tracker(record, True)
     backoff = 1
     try:
