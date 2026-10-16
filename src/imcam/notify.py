@@ -1,8 +1,12 @@
-"""Desktop notifications: notify-send (Linux), osascript (macOS), winotify toasts (Windows).
-Never raises; returns False when no backend could show the message."""
+"""Event delivery: a log line, a desktop notification (notify-send on Linux, osascript on macOS, winotify
+toasts on Windows) and the user's hook command. send() never raises; it returns False when no backend
+could show the message."""
+import os
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 _DEVNULL = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -47,3 +51,26 @@ def _windows(title, message):
         except Exception:
             pass
         return False
+
+
+def _run_hook(argv, env):
+    subprocess.Popen(argv, env=env)
+
+
+def make_notifier(cfg, desktop=None, run_hook=None, log=print):
+    """Callable (name, msg, push=True) delivering one event. Every event is logged; push events also go to
+    the desktop and to cfg["hook"] with IMCAM_EVENT / IMCAM_MESSAGE in its environment. desktop(title, msg),
+    run_hook(argv, env) and log(line) are the adapters; the defaults are send(), Popen and print."""
+    hook = shlex.split(cfg.get("hook") or "", posix=os.name != "nt")
+
+    def deliver(name, msg, push=True):
+        log("%s [%s] %s" % (time.strftime("%H:%M:%S"), name, msg))
+        if not push:
+            return
+        (desktop or send)("ImCam", msg)
+        if hook:
+            try:
+                (run_hook or _run_hook)(hook, dict(os.environ, IMCAM_EVENT=name, IMCAM_MESSAGE=msg))
+            except OSError as e:
+                print("hook failed: %s" % e, file=sys.stderr)
+    return deliver

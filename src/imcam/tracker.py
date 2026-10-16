@@ -10,7 +10,6 @@ import collections
 import json
 import os
 import queue
-import shlex
 import subprocess
 import sys
 import threading
@@ -245,22 +244,6 @@ class Health:
         return []
 
 
-def make_notifier(cfg):
-    hook = shlex.split(cfg.get("hook") or "", posix=os.name != "nt")
-
-    def notify(name, msg, push=True):
-        print("%s [%s] %s" % (time.strftime("%H:%M:%S"), name, msg), flush=True)
-        if not push:
-            return
-        notify.send("ImCam", msg)
-        if hook:
-            try:
-                subprocess.Popen(hook, env=dict(os.environ, IMCAM_EVENT=name, IMCAM_MESSAGE=msg))
-            except OSError as e:
-                print("hook failed: %s" % e, file=sys.stderr)
-    return notify
-
-
 # --- frame sources ---------------------------------------------------------------------
 
 def file_frames(path, cfg):
@@ -325,7 +308,7 @@ def pipe_frames(cfg, record_dir, stop):
             print("ffmpeg exited, restarting", file=sys.stderr)
 
 
-def run(frames, cfg, notify, live):
+def run(frames, cfg, deliver, live):
     """Feed (ts, frame) pairs through detector + tracker until exhausted (or forever if live)."""
     det, trk, health = BgSubDetector(cfg), Tracker(cfg), Health(cfg["stream_lost_s"])
     q = queue.Queue(maxsize=4)
@@ -352,14 +335,14 @@ def run(frames, cfg, notify, live):
         except queue.Empty:
             if live:
                 for ev in health.check(time.monotonic()):
-                    notify(*ev)
+                    deliver(*ev)
             continue
         if item is None:
             return
         ts, frame = item
         if live:
             for ev in health.frame(time.monotonic()):
-                notify(*ev)
+                deliver(*ev)
         obs = det.analyze(frame)
         if os.environ.get("IMCAM_DEBUG") and obs.kind != last:
             print("%.1fs obs: %s" % (ts, obs))
@@ -367,7 +350,7 @@ def run(frames, cfg, notify, live):
         for ev in trk.update(obs, ts):
             if not live:
                 ev = (ev[0], "[t=%.1fs] %s" % (ts, ev[1]), False)
-            notify(*ev)
+            deliver(*ev)
 
 
 class LiveTracker:
@@ -378,7 +361,7 @@ class LiveTracker:
         cfg = load_config() if track else dict(DEFAULTS)
         if track:
             self.thread = threading.Thread(
-                target=run, args=(pipe_frames(cfg, record_dir, self.stop_ev), cfg, make_notifier(cfg), True),
+                target=run, args=(pipe_frames(cfg, record_dir, self.stop_ev), cfg, notify.make_notifier(cfg), True),
                 daemon=True)
             self.thread.start()
         else:  # recording only
@@ -392,7 +375,7 @@ class LiveTracker:
 
 def run_file(path):
     cfg = load_config()
-    run(file_frames(path, cfg), cfg, make_notifier(cfg), live=False)
+    run(file_frames(path, cfg), cfg, notify.make_notifier(cfg), live=False)
 
 
 # --- calibration -----------------------------------------------------------------------
