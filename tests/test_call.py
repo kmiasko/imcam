@@ -93,6 +93,10 @@ def run(script, peer=None, sig=None, answer_timeout=5):
         async def feed():  # one message per loop turn, like a socket reader, so background tasks get to run
             for item in script:
                 await asyncio.sleep(0.01)
+                if callable(item):  # gate: wait until the condition holds
+                    while not item():
+                        await asyncio.sleep(0.01)
+                    continue
                 inbox.put_nowait(item)
 
         feeder = asyncio.create_task(feed())
@@ -145,7 +149,10 @@ def test_call_request_carries_the_munged_offer_then_each_local_candidate():
 
 
 def test_answer_is_accepted_then_audio_is_switched_and_video_requested_once_connected():
-    reason, sig, peer = run([answer("v=0 theirs"), msg("hangup")])
+    peer = FakePeer()
+    reason, sig, peer = run(
+        [answer("v=0 theirs"), lambda: peer.video_started, msg("hangup")], peer=peer
+    )
     assert reason == "hangup" and peer.answer == "v=0 theirs" and peer.video_started
     assert sig.types() == [
         "callRequest",
