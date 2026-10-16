@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from imcam import cli, extract_offer
+from imcam import call, extract_offer
 
 SDP = ("v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
        "a=ice-ufrag:abcd\r\na=fingerprint:sha-256 AA:BB\r\na=setup:actpass\r\na=mid:0\r\n")
@@ -41,8 +41,8 @@ def test_extract_without_offer_exits(tmp_path):
 def test_missing_offer_raises_helpful_error(tmp_path, monkeypatch):
     monkeypatch.delenv("IMCAM_APP_OFFER", raising=False)
     monkeypatch.setenv("IMCAM_HOME", str(tmp_path))
-    with pytest.raises(cli.OfferTemplateMissing, match="imcam extract-offer") as e:
-        cli.offer_template_path()
+    with pytest.raises(call.OfferTemplateMissing, match="imcam extract-offer") as e:
+        call.offer_template_path()
     assert str(tmp_path) in str(e.value)
     (tmp_path / "app_offer.sdp").write_text(SDP)
-    assert cli.offer_template_path() == str(tmp_path / "app_offer.sdp")
+    assert call.offer_template_path() == str(tmp_path / "app_offer.sdp")
