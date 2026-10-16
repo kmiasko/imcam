@@ -959,31 +959,18 @@ def do_monitor(c, serial, permit, record=None):
 
 
 def selftest():
-    # H.265 packetizer: a large NAL splits into FU packets that reassemble to the original
-    big = bytes([0x26, 0x01]) + bytes(range(256)) * 20  # IDR_W_RADL
-    small = bytes([0x40, 0x01, 1, 2, 3])
-    pk = h265_packetize([small, big], mtu=1200)
-    assert pk[0] == (small, False) and [m for _, m in pk] == [False] + [False] * (len(pk) - 2) + [True]
-    fus = [p for p, _ in pk[1:]]
-    assert all((p[0] >> 1) & 0x3F == 49 and p[2] & 0x3F == 19 for p in fus)
-    assert fus[0][2] & 0x80 and fus[-1][2] & 0x40 and not fus[0][2] & 0x40
-    assert bytes([(fus[0][0] & 0x81) | (19 << 1), fus[0][1]]) + b"".join(p[3:] for p in fus) == big
-    assert _split_annexb(b"\0\0\0\1" + small + b"\0\0\1" + big) == [small, big]
-    # frame round-trip (masking + 126/127 length paths)
-    p1 = json.dumps({"headers": {"id": "pub_heartbeat", "req_id": "1", "time": 1}}).encode()
-    op, pl, rest = parse_frame(frame_encode(0x1, p1), None)
-    assert op == 0x1 and pl == p1 and not rest
-    p2 = b"x" * 300
-    op, pl, rest = parse_frame(frame_encode(0x1, p2), None)
-    assert op == 0x1 and pl == p2 and not rest
-    p3 = b"y" * 70000
-    op, pl, rest = parse_frame(frame_encode(0x1, p3), None)
-    assert op == 0x1 and pl == p3 and not rest
-    # AES/ECB decrypt self-check (FIPS-197 vector)
-    assert aes_ecb_decrypt(bytes(range(16)), bytes.fromhex(
-        "69c4e0d86a7b0430d8cdb78070b4c55a")) == bytes.fromhex(
-        "00112233445566778899aabbccddeeff")
-    tracker.selftest()
+    """Run the repo's pytest suite when pytest and tests/ are available (a source checkout)."""
+    tests = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "tests")
+    try:
+        import pytest
+    except ImportError:
+        pytest = None
+    if pytest is None or not os.path.isdir(tests):
+        print("selftest skipped: needs pytest and the source checkout's tests/")
+        return
+    code = pytest.main(["-q", os.path.normpath(tests)])
+    if code:
+        raise SystemExit(code)
     print("selftest ok")
 
 
