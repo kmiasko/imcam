@@ -23,6 +23,7 @@ Needs Python 3.10+ and **ffmpeg + ffplay on PATH**
     imcam calibrate                               # with `watch`/`monitor` running; click crib corners, then 2 points of the lying head level
     imcam monitor <serial> <permit> [--record DIR]   # headless, reconnects forever
     imcam monitor --input rec.mkv                 # replay a recording to tune thresholds
+    imcam evaluate --input rec.mkv --wakes 120,3400   # score alerts vs. labelled wake times (s); --csv dumps observations
 
 Data (session, `roi.json`, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
 `roi.json` is hand-editable; see `DEFAULTS` in `src/imcam/tracker.py` for every setting (`hook` runs a command per alert

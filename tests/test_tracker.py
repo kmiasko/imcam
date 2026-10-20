@@ -2,7 +2,16 @@ import numpy as np
 import pytest
 
 from imcam import tracker
-from imcam.tracker import BgSubDetector, Health, Tracker, norm_line, line_y
+from imcam.tracker import (
+    BgSubDetector,
+    Health,
+    Obs,
+    Tracker,
+    line_y,
+    norm_line,
+    replay,
+    score,
+)
 
 CFG = dict(
     tracker.DEFAULTS,
@@ -121,6 +130,32 @@ def test_tilted_lying_line_is_compared_at_the_blob_x():
     assert s.det.analyze(blob(bg(), 480, 220, 80, 40)).kind == "lying"
 
 
+def test_long_upright_is_not_absorbed_into_the_background(settled):
+    settled.feed(upright, 900)  # 15 min at 2 fps, far past MOG2's slow-learning horizon
+    assert settled.det.analyze(upright()).kind == "upright"
+
+
+def test_background_still_adapts_while_lying():
+    s = Sim()
+    s.feed(bg, 15)
+    s.feed(lying, 900)
+    assert s.det.analyze(lying()).kind == "empty"  # settled baby became background
+
+
+def test_single_flicker_frame_does_not_cancel_the_hold():
+    trk = Tracker(CFG)
+    seq = ["upright"] * 6 + ["lying"] + ["upright"] * 6  # 0.5 s steps, hold is 5 s
+    events = [e[0] for i, k in enumerate(seq) for e in trk.update(Obs(k), i * 0.5)]
+    assert events == ["awake"]
+
+
+def test_gap_longer_than_gap_s_ends_the_episode():
+    trk = Tracker(CFG)
+    seq = ["upright"] * 6 + ["empty"] * 4 + ["upright"] * 6  # 2 s gap > gap_s
+    events = [e[0] for i, k in enumerate(seq) for e in trk.update(Obs(k), i * 0.5)]
+    assert events == []
+
+
 def test_bare_number_lying_line_is_horizontal():
     assert line_y(norm_line(0.6), 0.3) == 0.6
 
@@ -130,3 +165,23 @@ def test_health_reports_stream_lost_and_restored():
     assert h.frame(0) == [] and h.check(59) == []
     assert [e[0] for e in h.check(61)] == ["stream_lost"] and h.check(70) == []
     assert [e[0] for e in h.frame(80)] == ["stream_restored"] and h.frame(81) == []
+
+
+def test_score_matches_alerts_to_labelled_wakes():
+    r = score([100.0, 500.0, 900.0], [95.0, 2000.0], tol_s=30, duration_s=3600)
+    assert r["matched"] == 1 and r["missed"] == 1 and r["false_alerts"] == 2
+    assert r["delays"] == [5.0] and r["false_per_hour"] == 2.0
+
+
+def test_replay_yields_observation_and_events_per_frame():
+    cfg = tracker.validate_config(dict(CFG))
+    frames = [
+        (i * 0.5, f)
+        for i, f in enumerate(
+            [bg() for _ in range(20)]
+            + [lying() for _ in range(40)]
+            + [upright() for _ in range(16)]
+        )
+    ]
+    out = list(replay(iter(frames), cfg))
+    assert [e[0] for _, _, evs in out for e in evs] == ["awake"]

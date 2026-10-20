@@ -16,6 +16,8 @@ Commands:
   imcam monitor <serial> <permit> [--record DIR] [--input FILE]
                             headless awake-tracking with reconnect; --input replays a file
   imcam calibrate [--input FILE]   click crib ROI + lying line -> ~/.imcam/roi.json
+  imcam evaluate --input FILE --wakes T1,T2,... [--tol SEC] [--csv OUT]
+                            replay a recording, score awake alerts against labelled wake times (s)
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
 
@@ -184,6 +186,21 @@ def main():
         return
     if cmd in ("calibrate", "monitor") and infile:  # offline: no network
         tracker.calibrate(infile) if cmd == "calibrate" else tracker.run_file(infile)
+        return
+    if cmd == "evaluate":
+        wakes, tol, csv_out = (
+            _opt(args, "--wakes"),
+            _opt(args, "--tol"),
+            _opt(args, "--csv"),
+        )
+        if not infile or wakes is None:
+            raise SystemExit("usage: imcam evaluate --input FILE --wakes T1,T2,...")
+        tracker.evaluate_file(
+            infile,
+            [float(t) for t in wakes.split(",") if t],
+            float(tol) if tol else 30.0,
+            csv_out,
+        )
         return
     if cmd == "calibrate":
         tracker.calibrate()

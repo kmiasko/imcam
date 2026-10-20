@@ -31,6 +31,7 @@ DEFAULTS = {
     "warmup_frames": 15,  # frames after a reset before detecting again
     "learning_rate": 0.001,  # MOG2 learning rate (slow: a sitting baby must not be absorbed)
     "hold_s": 5.0,  # upright must persist this long to fire
+    "gap_s": 1.0,  # non-upright observations shorter than this do not end an upright episode
     "cooldown_s": 600.0,  # minimum time between awake notifications
     "stream_lost_s": 60.0,  # no frames for this long -> "stream lost"
     "frame_w": 640,
@@ -74,6 +75,7 @@ def validate_config(cfg):
         "aspect_thresh",
         "min_blob_frac",
         "hold_s",
+        "gap_s",
         "cooldown_s",
         "stream_lost_s",
         "frame_w",
@@ -156,6 +158,7 @@ class BgSubDetector(Detector):
         self.roi_area = max(1, int(cv2.countNonZero(self.roi_mask)))
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         self.prev = None
+        self.upright = False  # last observation was upright: the model is frozen
         self._new_model()
 
     def _new_model(self):
@@ -171,6 +174,11 @@ class BgSubDetector(Detector):
         )  # brightness, chroma
 
     def analyze(self, frame):
+        obs = self._analyze(frame)
+        self.upright = obs.kind == "upright"
+        return obs
+
+    def _analyze(self, frame):
         cv2, np, cfg = self.cv2, self.np, self.cfg
         if frame.shape[:2] != (self.h, self.w):
             frame = cv2.resize(frame, (self.w, self.h))
@@ -182,10 +190,9 @@ class BgSubDetector(Detector):
         if jumped:  # IR <-> colour switch or lights: the model is meaningless now
             self._new_model()
         gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 0)
-        # while warming up, learn fast; afterwards slowly so a sitting baby is not absorbed
-        fg = self.mog.apply(
-            gray, learningRate=-1 if self.warm > 0 else cfg["learning_rate"]
-        )
+        # warming up: learn fast; upright: freeze so a sitting baby is never absorbed; else learn slowly
+        lr = -1 if self.warm > 0 else 0 if self.upright else cfg["learning_rate"]
+        fg = self.mog.apply(gray, learningRate=lr)
         if jumped:
             return Obs("reset")
         if self.warm > 0:
@@ -225,6 +232,7 @@ class Tracker:
     def __init__(self, cfg):
         self.cfg = cfg
         self.upright_since = None
+        self.last_upright = None  # latest upright observation of the episode
         self.fired = False  # alert already sent (or attempted) for this upright episode
         self.alerted = (
             False  # an awake alert is outstanding, so "lying again" is worth logging
@@ -233,16 +241,14 @@ class Tracker:
 
     def update(self, obs, ts):
         k, ev = obs.kind, []
-        if k in ("reset", "warmup", "paused", "empty"):
-            self.upright_since, self.fired = None, False
-        elif k == "lying":
-            self.upright_since, self.fired = None, False
-            if self.alerted:
-                self.alerted = False
-                ev.append(("lying_again", "baby is lying down again", False))
-        elif k == "upright":
+        if k in ("reset", "warmup"):  # the model is meaningless: forget the episode
+            self.upright_since = self.last_upright = None
+            self.fired = False
+            return ev
+        if k == "upright":
             if self.upright_since is None:
                 self.upright_since = ts
+            self.last_upright = ts
             if (
                 not self.fired
                 and ts - self.upright_since >= self.cfg["hold_s"]
@@ -254,6 +260,18 @@ class Tracker:
                 self.fired = self.alerted = True
                 self.last_alert = ts
                 ev.append(("awake", "baby is awake (sitting/standing up)", True))
+            return ev
+        # lying / empty / paused: a short flicker is tolerated, a longer gap ends the episode
+        if (
+            self.upright_since is not None
+            and ts - self.last_upright <= self.cfg["gap_s"]
+        ):
+            return ev
+        self.upright_since = self.last_upright = None
+        self.fired = False
+        if k == "lying" and self.alerted:
+            self.alerted = False
+            ev.append(("lying_again", "baby is lying down again", False))
         return ev
 
 
@@ -386,6 +404,65 @@ def pipe_frames(cfg, record_dir, stop, on_proc=None):
             stop_process(proc)
         if not stop.wait(2):
             print("ffmpeg exited, restarting", file=sys.stderr)
+
+
+def replay(frames, cfg):
+    """Feed (ts, frame) pairs through detector + tracker; yields (ts, obs, events) per frame."""
+    det, trk = BgSubDetector(cfg), Tracker(cfg)
+    for ts, frame in frames:
+        obs = det.analyze(frame)
+        yield ts, obs, trk.update(obs, ts)
+
+
+def score(alerts, wakes, tol_s=30.0, duration_s=None):
+    """Compare "awake" alert times with labelled wake times (same clock). An alert matches the nearest
+    unmatched wake within tol_s (either side: labels are approximate and alerts trail by hold_s)."""
+    free, delays, false = sorted(wakes), [], 0
+    for a in sorted(alerts):
+        near = [w for w in free if abs(a - w) <= tol_s]
+        if near:
+            w = min(near, key=lambda w: abs(a - w))
+            free.remove(w)
+            delays.append(round(a - w, 3))
+        else:
+            false += 1
+    r = {
+        "matched": len(delays),
+        "missed": len(free),
+        "false_alerts": false,
+        "delays": delays,
+    }
+    if duration_s:
+        r["false_per_hour"] = round(false * 3600.0 / duration_s, 3)
+    return r
+
+
+def evaluate_file(path, wakes, tol_s=30.0, csv_path=None):
+    """Replay a recording and print missed wakes / false alerts against labelled wake times (seconds).
+    csv_path also dumps every observation (ts, kind, top, ratio, area) for plotting thresholds."""
+    cfg = load_config()
+    alerts, last_ts, rows = [], 0.0, []
+    for ts, obs, events in replay(file_frames(path, cfg), cfg):
+        last_ts = ts
+        alerts += [ts for name, _, _ in events if name == "awake"]
+        rows.append((ts,) + tuple(obs))
+    if csv_path:
+        with open(csv_path, "w") as f:
+            f.write("ts,kind,top,ratio,area\n")
+            for r in rows:
+                f.write(",".join("" if v is None else str(v) for v in r) + "\n")
+    r = score(alerts, wakes, tol_s, last_ts)
+    print(
+        "wakes: %d matched, %d missed; false alerts: %d (%s/h); alert delays (s): %s"
+        % (
+            r["matched"],
+            r["missed"],
+            r["false_alerts"],
+            r.get("false_per_hour", "-"),
+            r["delays"],
+        )
+    )
+    return r
 
 
 def run(frames, cfg, deliver, live):
