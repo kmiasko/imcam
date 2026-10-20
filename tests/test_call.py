@@ -286,18 +286,6 @@ def test_remote_candidate_parses_the_servers_message_and_ignores_empty_ones():
     assert call._remote_candidate({}) is None
 
 
-def test_offer_template_gets_only_our_ice_credentials_and_fingerprint(tmp_path):
-    template = tmp_path / "t.sdp"
-    template.write_text(
-        "v=0\na=ice-ufrag:APP\na=ice-pwd:APPPW\na=fingerprint:sha-256 APP\nm=video 9\na=mid:0\n"
-    )
-    ours = "v=0\r\na=ice-ufrag:US\r\na=ice-pwd:USPW\r\na=fingerprint:sha-256 US\r\nm=video 9\r\n"
-    out = call._offer_from_template(ours, str(template))
-    assert out == (
-        "v=0\r\na=ice-ufrag:US\r\na=ice-pwd:USPW\r\na=fingerprint:sha-256 US\r\nm=video 9\r\na=mid:0\r\n"
-    )
-
-
 def test_aiortc_peer_offers_video_first_then_audio_and_closes_cleanly():
     async def main():
         peer = call.AiortcPeer({})

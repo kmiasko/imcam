@@ -1,16 +1,14 @@
-"""The WebRTC call to the camera: signaling messages over /im, the offer built from the official app's
-template, and the call state machine. The peer connection is the seam: AiortcPeer in production, a scripted
+"""The WebRTC call to the camera: signaling messages over /im, the stock-shaped offer (stock_offer.py), and the call state machine. The peer connection is the seam: AiortcPeer in production, a scripted
 fake in tests."""
 
 import asyncio
 import json
-import os
 import sys
 import threading
 import time
 import uuid
 
-from . import cloud, debug, paths, extract_offer, testvideo, wsproto
+from . import cloud, debug, stock_offer, testvideo, wsproto
 
 
 def _ice_servers(rsp):
@@ -110,44 +108,6 @@ class _Signal:
         threading.Thread(target=self._heartbeat, daemon=True).start()
 
 
-def _offer_from_template(sdp, path):
-    """The offer template with our ICE credentials and fingerprint substituted in."""
-    ours = {}
-    for line in sdp.split("\r\n"):
-        for key in ("a=ice-ufrag:", "a=ice-pwd:", "a=fingerprint:"):
-            if line.startswith(key):
-                ours.setdefault(key, line)
-    out = []
-    for line in open(path).read().splitlines():
-        out.append(next((v for k, v in ours.items() if line.startswith(k)), line))
-    return "\r\n".join(out) + "\r\n"
-
-
-class OfferTemplateMissing(Exception):
-    """The official app's offer SDP (needed for the camera to stream) is not installed."""
-
-
-def offer_template_path():
-    """Path of the app's offer SDP (IMCAM_APP_OFFER, else ~/.imcam/app_offer.sdp); raises if absent."""
-    tpl = os.environ.get("IMCAM_APP_OFFER") or paths.path(extract_offer.OFFER_NAME)
-    if not os.path.isfile(tpl):
-        raise OfferTemplateMissing(
-            "The official app's WebRTC offer was not found at %s.\n"
-            "The camera only streams when our offer looks like the app's, so this file is required, and it is not "
-            "shipped with imcam.\n"
-            "Capture the app's signaling log while it opens a live view (e.g. `adb logcat -d > app.log`), then run:\n"
-            "    imcam extract-offer app.log\n"
-            'See the README section "The app offer".' % tpl
-        )
-    return tpl
-
-
-def _munge_offer(sdp):
-    # the camera only streams when the offer has the official app's shape, so the template is used verbatim and only
-    # our ICE credentials and fingerprint go into it
-    return _offer_from_template(sdp, offer_template_path())
-
-
 class AiortcPeer:
     """Peer-connection adapter over aiortc: an offer with video first and a silent audio track; the video we
     send is the H.265 test pattern (the camera's own H.265 is picked up by the relay, not by aiortc)."""
@@ -206,7 +166,7 @@ async def run_call(
     """Offer, then handle the device's signaling messages until the call ends. Returns why it ended:
     no_answer | signaling_closed | rejected | refused | hangup. sig.send(obj) writes a signaling message,
     inbox yields parsed messages (None = signaling closed), peer is an AiortcPeer or a fake."""
-    munge = munge or _munge_offer
+    munge = munge or stock_offer.build
     loop = asyncio.get_running_loop()
     local = await peer.offer()
     sig.send(

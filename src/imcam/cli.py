@@ -5,7 +5,6 @@
 Commands:
   imcam selftest | doctor
   imcam extract-keys <app.apk|.xapk>        print the app's vkey / AES prefix as NAME=value lines (needs imcam[keys])
-  imcam extract-offer <app-log> [-o FILE]   install the official app's offer SDP (required by watch/monitor)
   imcam login <account> <passwd>
   imcam code-get <account>
   imcam code-check <account> <code> [token]
@@ -31,7 +30,6 @@ from . import (
     cloud,
     config,
     extract_keys,
-    extract_offer,
     paths,
     relay,
     tracker,
@@ -42,7 +40,6 @@ def do_watch(c, serial, permit, track=False, record=None):
     """Sign in to the /im signaling server, send a WebRTC callRequest to the device
     and show the incoming video in ffplay until Ctrl-C. Needs aiortc (~/.imcam/venv).
     --track / --record also feed the stream to tracker.py's ffmpeg."""
-    call.offer_template_path()  # fail before opening any window
     relay.install((relay.RTP_PORT,) + ((relay.TRACK_PORT,) if record or track else ()))
     player = relay.start_ffplay()
     live = _start_tracker(record, track)
@@ -65,7 +62,6 @@ def _start_tracker(record, track):
 
 def do_monitor(c, serial, permit, record=None):
     """Headless: no ffplay, tracking on, reconnects forever with exponential backoff (cap 30 s)."""
-    call.offer_template_path()  # fail before connecting
     relay.install((relay.TRACK_PORT,))
     live = _start_tracker(record, True)
     backoff = 1
@@ -77,7 +73,7 @@ def do_monitor(c, serial, permit, record=None):
                     c.connect()
                 cloud.ensure_logged_in(c)
                 call.call_once(c, serial, permit)
-            except (call.OfferTemplateMissing, config.ConfigMissing):
+            except config.ConfigMissing:
                 raise  # retrying cannot fix this
             except (Exception, SystemExit) as e:
                 print("monitor: %s" % (e or type(e).__name__), file=sys.stderr)
@@ -139,11 +135,6 @@ def doctor():
         except config.ConfigMissing as e:
             print("%-8s %s MISSING\n%s" % ("config", name, e))
             ok = False
-    try:
-        print("offer    %s" % call.offer_template_path())
-    except call.OfferTemplateMissing as e:
-        print("offer    MISSING (run `imcam extract-offer`)\n%s" % e)
-        ok = False
     print("notify   %s" % (notify.backend() or "none (messages are only logged)"))
     print("data dir %s" % paths.home())
     return 0 if ok else 1
@@ -181,9 +172,6 @@ def main():
     if cmd == "extract-keys":
         extract_keys.main(args[1:])
         return
-    if cmd == "extract-offer":
-        extract_offer.main(args[1:])
-        return
     if cmd in ("calibrate", "monitor") and infile:  # offline: no network
         tracker.calibrate(infile) if cmd == "calibrate" else tracker.run_file(infile)
         return
@@ -205,11 +193,6 @@ def main():
     if cmd == "calibrate":
         tracker.calibrate()
         return
-    if cmd in ("watch", "monitor"):
-        try:
-            call.offer_template_path()  # before any network traffic
-        except call.OfferTemplateMissing as e:
-            sys.exit("error: %s" % e)
     try:
         config.require(
             "IMCAM_VKEY",
@@ -280,7 +263,6 @@ def main():
     except (
         cloud.RspException,
         TimeoutError,
-        call.OfferTemplateMissing,
         config.ConfigMissing,
     ) as e:
         print("error: %s" % e, file=sys.stderr)
