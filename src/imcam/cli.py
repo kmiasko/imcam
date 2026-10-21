@@ -21,6 +21,9 @@ Commands:
                             replay a recording, score awake alerts against labelled wake times (s)
   imcam tune --clip FILE:T1,T2,... [--clip ...] [--tol SEC]
                             fit the self-calibrating detector's knobs on labelled recordings (leave-one-out)
+  imcam train --clip FILE:T1,T2,... [--clip ...] [--tol SEC]
+                            fit the optional stage-2 classifier (~/.imcam/classifier.json) on labelled recordings;
+                            kept only if its held-out results beat the rules
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
 
@@ -37,6 +40,7 @@ from . import (
     paths,
     relay,
     tracker,
+    train,
     tune,
 )  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
 
@@ -140,6 +144,34 @@ def doctor():
         except config.ConfigMissing as e:
             print("%-8s %s MISSING\n%s" % ("config", name, e))
             ok = False
+    from . import classifier, seed
+
+    try:
+        cfg = tracker.load_config()
+    except SystemExit:  # a broken roi.json is not doctor's business
+        cfg = tracker.DEFAULTS
+    sp, cp = seed.model_path(cfg), classifier.model_path(cfg)
+    print(
+        "seed     %s"
+        % (
+            "off"
+            if sp is None
+            else sp + (" ok" if os.path.isfile(sp) else " (downloaded on first use)")
+        )
+    )
+    print(
+        "classif  %s"
+        % (
+            "off"
+            if cp is None
+            else cp
+            + (
+                " ok"
+                if os.path.isfile(cp)
+                else " (none: rules; `imcam train` makes one)"
+            )
+        )
+    )
     print("notify   %s" % (notify.backend() or "none (messages are only logged)"))
     print("data dir %s" % paths.home())
     return 0 if ok else 1
@@ -178,14 +210,14 @@ def main():
     if cmd == "extract-keys":
         extract_keys.main(args[1:])
         return
-    if cmd == "tune":
+    if cmd in ("tune", "train"):
         clips = []
         while (clip := _opt(args, "--clip")) is not None:
             clips.append(clip)
         tol = _opt(args, "--tol")
         if not clips:
-            raise SystemExit("usage: imcam tune --clip FILE:T1,T2,... [--clip ...]")
-        tune.run(clips, float(tol) if tol else 30.0)
+            raise SystemExit("usage: imcam %s --clip FILE:T1,T2,... [--clip ...]" % cmd)
+        (tune if cmd == "tune" else train).run(clips, float(tol) if tol else 30.0)
         return
     if cmd == "calibrate" and auto:
         if not infile:
