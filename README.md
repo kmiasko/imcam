@@ -20,12 +20,15 @@ Needs Python 3.10+ and **ffmpeg + ffplay on PATH**
     imcam devlist
     imcam watch <serial> <permit>                 # ffplay window
     imcam watch <serial> <permit> --track         # ... plus awake tracking
-    imcam calibrate                               # with `watch`/`monitor` running; click crib corners, then 2 points of the lying head level
+    imcam calibrate                               # optional hand calibration (with `watch`/`monitor` running): crib corners, then 2 points of the lying head level
     imcam monitor <serial> <permit> [--record DIR]   # headless, reconnects forever
     imcam monitor --input rec.mkv                 # replay a recording to tune thresholds
     imcam evaluate --input rec.mkv --wakes 120,3400   # score alerts vs. labelled wake times (s); --csv dumps observations
 
 Data (session, `roi.json`, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
+Without a hand calibration, `monitor` self-calibrates: it spends the first `auto_cal_s` (2 min) learning the crib region and the
+baby's lying appearance from the stream, writes the region to `roi.json` (`"calibrated": "auto"`), and recalibrates if the camera moves.
+`imcam tune --clip FILE:T1,T2,...` fits the remaining thresholds on labelled recordings.
 `roi.json` is hand-editable; see `DEFAULTS` in `src/imcam/tracker.py` for every setting (`hook` runs a command per alert
 with `IMCAM_EVENT` / `IMCAM_MESSAGE` in its environment).
 

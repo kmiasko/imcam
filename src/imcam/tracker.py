@@ -1,7 +1,10 @@
 """Baby "awake" tracking for ImCam: background subtraction inside a crib ROI.
 
-Awake = the foreground blob's top edge rises above a calibrated "head level when lying"
-line, or its height/width ratio passes a threshold, for `hold_s` seconds in a row.
+Awake = the foreground blob looks upright for `hold_s` seconds in a row. Two ways to say "upright":
+  - manual: the blob's top edge rises above a hand-drawn `lying_line` or its height/width ratio passes
+    `aspect_thresh` (roi.json from `imcam calibrate`);
+  - self-calibrating (default when there is no `lying_line`): autocal.py discovers the crib ROI and the
+    baby's lying appearance from the stream itself, and "upright" is measured relative to that baseline.
 
 Needs numpy + OpenCV (installed with the package); imported lazily by cli.py. Config lives in
 ~/.imcam/roi.json (hand-editable, coordinates normalized to 0..1 of the frame).
@@ -21,11 +24,21 @@ from . import notify, paths, relay
 CONFIG_FILE = paths.path("roi.json")
 
 DEFAULTS = {
-    "roi": None,  # [[x, y], ...] crib polygon, normalized
-    "lying_line": None,  # head level when lying: [[x1, y1], [x2, y2]] (tilted ok) or a single y; blob top above it = upright
+    "roi": None,  # [[x, y], ...] crib polygon, normalized; None = discovered automatically
+    "lying_line": None,  # head level when lying: [[x1, y1], [x2, y2]] (tilted ok) or a single y; blob top above it = upright. None = self-calibrate
+    "calibrated": "",  # "auto" marks a roi written by autocal (re-discovered each run); remove it to pin the roi by hand
     "lying_margin": 0.0,  # extra normalized distance above the line required
     "aspect_thresh": 1.5,  # blob height/width above this = upright
     "min_blob_frac": 0.02,  # blob area (fraction of ROI area) below this is ignored
+    "rise_mult": 0.4,  # self-calibrated: upright if the blob top is this many lying-blob widths above the lying top
+    "lying_len_mult": 0.6,  # self-calibrated: upright if blob height exceeds this x the lying-blob width
+    "min_area_ratio": 0.35,  # self-calibrated: blobs below this x the median lying area are ignored
+    "auto_cal_s": 120.0,  # self-calibration: seconds of stream observed before the roi/baseline are fixed
+    "auto_global_frac": 0.35,  # self-calibration: foreground above this frame fraction (adult, lights) is ignored
+    "auto_roi_margin": 0.25,  # self-calibration: sideways/downward growth of the discovered footprint
+    "auto_min_samples": 20,  # lying-blob samples needed before the baseline is trusted
+    "drift_px": 12.0,  # camera shift (px at frame_w) that drops the calibration
+    "drift_check_s": 10.0,  # how often to check for camera movement
     "outside_frac": 0.02,  # foreground outside ROI (fraction of frame) pauses detection
     "brightness_jump": 25.0,  # global mean-gray / chroma jump that resets the background model
     "warmup_frames": 15,  # frames after a reset before detecting again
@@ -48,7 +61,7 @@ def load_config(path=None):
         with open(path) as f:
             user = json.load(f)
     except FileNotFoundError:
-        raise SystemExit("no %s; run: imcam calibrate" % path)
+        user = {}  # nothing saved: self-calibrate
     except ValueError as e:
         raise SystemExit("%s: invalid JSON: %s" % (path, e))
     unknown = set(user) - set(DEFAULTS)
@@ -59,7 +72,7 @@ def load_config(path=None):
 
 def validate_config(cfg):
     roi = cfg["roi"]
-    if (
+    if roi is not None and (
         not isinstance(roi, list)
         or len(roi) < 3
         or not all(
@@ -70,7 +83,8 @@ def validate_config(cfg):
         )
     ):
         raise SystemExit("roi must be >= 3 [x, y] points, each in 0..1")
-    cfg["lying_line"] = norm_line(cfg["lying_line"])
+    if cfg["lying_line"] is not None:
+        cfg["lying_line"] = norm_line(cfg["lying_line"])
     for k in (
         "aspect_thresh",
         "min_blob_frac",
@@ -83,6 +97,15 @@ def validate_config(cfg):
         "fps",
         "brightness_jump",
         "learning_rate",
+        "rise_mult",
+        "lying_len_mult",
+        "min_area_ratio",
+        "auto_cal_s",
+        "auto_global_frac",
+        "auto_roi_margin",
+        "auto_min_samples",
+        "drift_px",
+        "drift_check_s",
     ):
         if not isinstance(cfg[k], (int, float)) or cfg[k] <= 0:
             raise SystemExit("%s must be a positive number" % k)
@@ -125,6 +148,26 @@ def save_config(roi, lying_line, path=None):
         cur = {}
     cur["roi"] = [[round(x, 4), round(y, 4)] for x, y in roi]
     cur["lying_line"] = [[round(x, 4), round(y, 4)] for x, y in lying_line]
+    cur.pop("calibrated", None)  # a hand calibration replaces an automatic one
+    return _write_config(cur, path)
+
+
+def save_auto_roi(roi, path=None):
+    """Record an autocal-discovered roi (marked `calibrated: auto`, so it is re-discovered each run)."""
+    path = path or CONFIG_FILE
+    try:
+        with open(path) as f:
+            cur = json.load(f)
+    except Exception:
+        cur = {}
+    if cur.get("roi") is not None and cur.get("calibrated") != "auto":
+        return None  # hand-edited: never overwrite
+    cur["roi"] = [[round(x, 4), round(y, 4)] for x, y in roi]
+    cur["calibrated"] = "auto"
+    return _write_config(cur, path)
+
+
+def _write_config(cur, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(cur, f, indent=2)
@@ -134,8 +177,9 @@ def save_config(roi, lying_line, path=None):
 # --- detection -------------------------------------------------------------------------
 
 Obs = collections.namedtuple("Obs", "kind top ratio area")
-# kind: warmup | reset | paused | empty | lying | upright
+# kind: calibrating | warmup | reset | paused | empty | lying | upright
 Obs.__new__.__defaults__ = (None, None, None)
+FULL_ROI = [[0, 0], [1, 0], [1, 1], [0, 1]]
 
 
 class Detector:
@@ -146,13 +190,20 @@ class Detector:
 
 
 class BgSubDetector(Detector):
-    def __init__(self, cfg):
+    """Foreground blob inside the ROI -> Obs. With a `lying_line` in cfg, "upright" is judged against that
+    hand-drawn line; otherwise against `baseline` (autocal.Baseline), the baby's own lying appearance, which
+    this detector keeps refreshing from its "lying" observations. The last frame's foreground mask and
+    blob (x, y, w, h, area px) stay in `last_fg` / `last_blob` for autocal's discovery."""
+
+    def __init__(self, cfg, baseline=None, roi=None):
         import cv2
         import numpy as np
 
-        self.cv2, self.np, self.cfg = cv2, np, cfg
+        self.cv2, self.np, self.cfg, self.baseline = cv2, np, cfg, baseline
         self.w, self.h = cfg["frame_w"], cfg["frame_h"]
-        poly = np.array([[x * self.w, y * self.h] for x, y in cfg["roi"]], np.int32)
+        self.last_fg = self.last_blob = None
+        roi = roi or cfg["roi"] or FULL_ROI
+        poly = np.array([[x * self.w, y * self.h] for x, y in roi], np.int32)
         self.roi_mask = np.zeros((self.h, self.w), np.uint8)
         cv2.fillPoly(self.roi_mask, [poly], 255)
         self.roi_area = max(1, int(cv2.countNonZero(self.roi_mask)))
@@ -180,6 +231,7 @@ class BgSubDetector(Detector):
 
     def _analyze(self, frame):
         cv2, np, cfg = self.cv2, self.np, self.cfg
+        self.last_fg = self.last_blob = None
         if frame.shape[:2] != (self.h, self.w):
             frame = cv2.resize(frame, (self.w, self.h))
         stats = self._stats(frame)
@@ -200,6 +252,7 @@ class BgSubDetector(Detector):
             return Obs("warmup")
         fg = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)[1]  # drop shadows (127)
         fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, self.kernel)
+        self.last_fg = fg
         outside = cv2.countNonZero(cv2.bitwise_and(fg, cv2.bitwise_not(self.roi_mask)))
         if outside > cfg["outside_frac"] * self.w * self.h:
             return Obs("paused")
@@ -210,19 +263,46 @@ class BgSubDetector(Detector):
         if not cnts:
             return Obs("empty")
         c = max(cnts, key=cv2.contourArea)
-        area = cv2.contourArea(c) / self.roi_area
-        if area < cfg["min_blob_frac"]:
-            return Obs("empty")
+        area_px = cv2.contourArea(c)
         x, y, w, h = cv2.boundingRect(c)
+        self.last_blob = (x, y, w, h, area_px)
+        area = area_px / self.roi_area
+        manual = cfg["lying_line"] is not None
+        bl = self.baseline
+        if manual or bl is None or not bl.ready:
+            if area < cfg["min_blob_frac"]:
+                return Obs("empty")
+        elif area_px < cfg["min_area_ratio"] * bl.area:
+            return Obs("empty")
         top, ratio = y / self.h, h / max(1, w)
-        tx = (
-            c[c[:, 0, 1].argmin(), 0, 0] / self.w
-        )  # x of the blob's highest point, compared to the line there
-        upright = (
-            top < line_y(cfg["lying_line"], tx) - cfg["lying_margin"]
-            or ratio > cfg["aspect_thresh"]
-        )
+        if manual:
+            tx = (
+                c[c[:, 0, 1].argmin(), 0, 0] / self.w
+            )  # x of the blob's highest point, compared to the line there
+            upright = (
+                top < line_y(cfg["lying_line"], tx) - cfg["lying_margin"]
+                or ratio > cfg["aspect_thresh"]
+            )
+        elif bl is not None and bl.ready:
+            # scale-free: heights and rises in units of the baby's own lying-blob width
+            upright = (
+                h > cfg["lying_len_mult"] * bl.width
+                or bl.top - y >= cfg["rise_mult"] * bl.width
+            )
+        else:
+            upright = False  # no baseline yet: never guess
+        if not upright and bl is not None and not manual:
+            bl.add(y, w, h, area_px)
         return Obs("upright" if upright else "lying", top, ratio, area)
+
+
+def make_detector(cfg, on_roi=None):
+    """BgSubDetector with a hand calibration (lying_line, not marked auto); autocal.AutoDetector otherwise."""
+    if cfg["lying_line"] is not None and cfg["calibrated"] != "auto":
+        return BgSubDetector(cfg)
+    from . import autocal
+
+    return autocal.AutoDetector(cfg, on_roi)
 
 
 class Tracker:
@@ -241,7 +321,11 @@ class Tracker:
 
     def update(self, obs, ts):
         k, ev = obs.kind, []
-        if k in ("reset", "warmup"):  # the model is meaningless: forget the episode
+        if k in (
+            "reset",
+            "warmup",
+            "calibrating",
+        ):  # the model is meaningless: forget the episode
             self.upright_since = self.last_upright = None
             self.fired = False
             return ev
@@ -408,7 +492,7 @@ def pipe_frames(cfg, record_dir, stop, on_proc=None):
 
 def replay(frames, cfg):
     """Feed (ts, frame) pairs through detector + tracker; yields (ts, obs, events) per frame."""
-    det, trk = BgSubDetector(cfg), Tracker(cfg)
+    det, trk = make_detector(cfg), Tracker(cfg)
     for ts, frame in frames:
         obs = det.analyze(frame)
         yield ts, obs, trk.update(obs, ts)
@@ -467,7 +551,8 @@ def evaluate_file(path, wakes, tol_s=30.0, csv_path=None):
 
 def run(frames, cfg, deliver, live):
     """Feed (ts, frame) pairs through detector + tracker until exhausted (or forever if live)."""
-    det, trk, health = BgSubDetector(cfg), Tracker(cfg), Health(cfg["stream_lost_s"])
+    det = make_detector(cfg, on_roi=save_auto_roi if live else None)
+    trk, health = Tracker(cfg), Health(cfg["stream_lost_s"])
     q = queue.Queue(maxsize=4)
 
     def pump():
@@ -551,6 +636,26 @@ class LiveTracker:
 def run_file(path):
     cfg = load_config()
     run(file_frames(path, cfg), cfg, notify.make_notifier(cfg), live=False)
+
+
+def autocalibrate_file(path):
+    """Self-calibrate on a recording and save the discovered ROI (marked `calibrated: auto`)."""
+    cfg = load_config()
+    if cfg["roi"] is not None and cfg["calibrated"] != "auto":
+        raise SystemExit(
+            "roi in %s is pinned by hand (remove it to self-calibrate)" % CONFIG_FILE
+        )
+    found = []
+    det = make_detector(cfg, on_roi=found.append)
+    for _, frame in file_frames(path, cfg):
+        det.analyze(frame)
+        if found:
+            break
+    if not found:
+        raise SystemExit(
+            "no calibration after the whole recording (too short or no motion)"
+        )
+    print("saved %s" % save_auto_roi(found[0]))
 
 
 # --- calibration -----------------------------------------------------------------------
