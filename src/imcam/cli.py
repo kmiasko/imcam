@@ -15,8 +15,12 @@ Commands:
   imcam monitor <serial> <permit> [--record DIR] [--input FILE]
                             headless awake-tracking with reconnect; --input replays a file
   imcam calibrate [--input FILE]   click crib ROI + lying line -> ~/.imcam/roi.json
+  imcam calibrate --auto --input FILE
+                            self-calibrate on a recording and save the discovered ROI (monitor does this by itself)
   imcam evaluate --input FILE --wakes T1,T2,... [--tol SEC] [--csv OUT]
                             replay a recording, score awake alerts against labelled wake times (s)
+  imcam tune --clip FILE:T1,T2,... [--clip ...] [--tol SEC]
+                            fit the self-calibrating detector's knobs on labelled recordings (leave-one-out)
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
 
@@ -33,6 +37,7 @@ from . import (
     paths,
     relay,
     tracker,
+    tune,
 )  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
 
 
@@ -167,10 +172,27 @@ def main():
     record = _opt(args, "--record")
     infile = _opt(args, "--input")
     track = _opt(args, "--track", flag=True)
+    auto = _opt(args, "--auto", flag=True)
     if cmd == "doctor":
         sys.exit(doctor())
     if cmd == "extract-keys":
         extract_keys.main(args[1:])
+        return
+    if cmd == "tune":
+        clips = []
+        while (clip := _opt(args, "--clip")) is not None:
+            clips.append(clip)
+        tol = _opt(args, "--tol")
+        if not clips:
+            raise SystemExit("usage: imcam tune --clip FILE:T1,T2,... [--clip ...]")
+        tune.run(clips, float(tol) if tol else 30.0)
+        return
+    if cmd == "calibrate" and auto:
+        if not infile:
+            raise SystemExit(
+                "usage: imcam calibrate --auto --input FILE (live, `imcam monitor` calibrates itself)"
+            )
+        tracker.autocalibrate_file(infile)
         return
     if cmd in ("calibrate", "monitor") and infile:  # offline: no network
         tracker.calibrate(infile) if cmd == "calibrate" else tracker.run_file(infile)
