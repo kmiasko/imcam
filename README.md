@@ -29,8 +29,7 @@ Install it so that `baby-tracker` is on the PATH; `imcam doctor` checks this. `i
 `~/.imcam/track.sdp` as input and stops it on exit.
 
 Data (session, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
-baby-tracker keeps its own data in `~/.baby-tracker`. Earlier versions kept `roi.json`, `classifier.json` and `models/` in
-`~/.imcam`; they are not migrated. Copy `examples/roi.json` from the baby-tracker repository to `~/.baby-tracker`.
+baby-tracker keeps its own data in `~/.baby-tracker`.
 
 ## Vendor constants
 
