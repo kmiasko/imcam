@@ -23,7 +23,7 @@ Needs Python 3.10+ and **ffmpeg + ffplay on PATH**
     imcam monitor <serial> <permit> [--record DIR]   # headless, reconnects forever, runs baby-tracker
     imcam snapshot -o frame.png                   # one frame of the running stream, for baby-tracker calibration
 
-Awake tracking is done by the separate [baby-tracker](../../baby-tracker) program, which has its own commands
+Awake tracking is done by the separate [baby-tracker](https://github.com/kmiasko/baby-tracker) program, which has its own commands
 (calibration, evaluation, tuning, training). Install it so that `baby-tracker` is on the PATH; `imcam doctor` checks this. `imcam monitor` starts it with
 `~/.imcam/track.sdp` as input and stops it on exit.
 
