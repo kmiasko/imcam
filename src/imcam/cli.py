@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ImCam (com.cylan.chatcam) Linux/Windows client: command dispatch, the WebRTC call and the monitor loop.
-(Cloud protocol: cloud.py. Video relay: relay.py. Awake tracking: tracker.py.)
+(Cloud protocol: cloud.py. Video relay: relay.py. Awake tracking: the separate baby-tracker program.)
 
 Commands:
   imcam selftest | doctor
@@ -12,18 +12,10 @@ Commands:
   imcam devlist | account | logout
   imcam call <msgid> [json-body]
   imcam watch <serial> <permit> [--track] [--record DIR]   (ffplay window)
-  imcam monitor <serial> <permit> [--record DIR] [--input FILE]
-                            headless awake-tracking with reconnect; --input replays a file
-  imcam calibrate [--input FILE]   click crib ROI + lying line -> ~/.imcam/roi.json
-  imcam calibrate --auto --input FILE
-                            self-calibrate on a recording and save the discovered ROI (monitor does this by itself)
-  imcam evaluate --input FILE --wakes T1,T2,... [--tol SEC] [--csv OUT]
-                            replay a recording, score awake alerts against labelled wake times (s)
-  imcam tune --clip FILE:T1,T2,... [--clip ...] [--tol SEC]
-                            fit the self-calibrating detector's knobs on labelled recordings (leave-one-out)
-  imcam train --clip FILE:T1,T2,... [--clip ...] [--tol SEC]
-                            fit the optional stage-2 classifier (~/.imcam/classifier.json) on labelled recordings;
-                            kept only if its held-out results beat the rules
+  imcam monitor <serial> <permit> [--record DIR]
+                            headless awake-tracking with reconnect (runs the separate `baby-tracker` program)
+  imcam snapshot [-o FILE.png]   save one frame of the running watch/monitor stream (for `baby-tracker calibrate --image`)
+  (calibrate / evaluate / tune / train live in baby-tracker)
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
 
@@ -39,16 +31,15 @@ from . import (
     extract_keys,
     paths,
     relay,
-    tracker,
-    train,
-    tune,
-)  # tracker is stdlib-only at import; numpy/cv2 load lazily inside it
+    snapshot,
+    tracker_proc,
+)
 
 
 def do_watch(c, serial, permit, track=False, record=None):
     """Sign in to the /im signaling server, send a WebRTC callRequest to the device
     and show the incoming video in ffplay until Ctrl-C. Needs aiortc (~/.imcam/venv).
-    --track / --record also feed the stream to tracker.py's ffmpeg."""
+    --track / --record also feed the stream to baby-tracker."""
     relay.install((relay.RTP_PORT,) + ((relay.TRACK_PORT,) if record or track else ()))
     player = relay.start_ffplay()
     live = _start_tracker(record, track)
@@ -65,8 +56,7 @@ def do_watch(c, serial, permit, track=False, record=None):
 def _start_tracker(record, track):
     if not (record or track):
         return None
-    paths.require_tool("ffmpeg")
-    return tracker.LiveTracker(record, track)
+    return tracker_proc.TrackerProcess(record)
 
 
 def do_monitor(c, serial, permit, record=None):
@@ -86,6 +76,7 @@ def do_monitor(c, serial, permit, record=None):
                 raise  # retrying cannot fix this
             except (Exception, SystemExit) as e:
                 print("monitor: %s" % (e or type(e).__name__), file=sys.stderr)
+            live.ensure_running()
             # a call that lived a while means the link was good: start backing off from scratch
             backoff = 1 if time.monotonic() - started > 60 else min(backoff * 2, 30)
             print("monitor: reconnecting in %ds" % backoff, file=sys.stderr)
@@ -115,22 +106,17 @@ def selftest():
 def doctor():
     """Report what is installed; returns the process exit code."""
     import importlib
-    from . import notify
 
     ok = True
-    for tool in ("ffmpeg", "ffplay"):
+    for tool, need in (
+        ("ffmpeg", "watch/monitor"),
+        ("ffplay", "watch"),
+        ("baby-tracker", "monitor/--track/--record"),
+    ):
         found = __import__("shutil").which(tool)
-        print(
-            "%-8s %s"
-            % (
-                tool,
-                found
-                or "MISSING (needed for %s)"
-                % ("watch/monitor" if tool == "ffmpeg" else "watch"),
-            )
-        )
+        print("%-12s %s" % (tool, found or "MISSING (needed for %s)" % need))
         ok &= bool(found) or tool == "ffplay"
-    for mod in ("aiortc", "av", "numpy", "cv2"):
+    for mod in ("aiortc", "av"):
         try:
             importlib.import_module(mod)
             print("%-8s ok" % mod)
@@ -144,35 +130,6 @@ def doctor():
         except config.ConfigMissing as e:
             print("%-8s %s MISSING\n%s" % ("config", name, e))
             ok = False
-    from . import classifier, seed
-
-    try:
-        cfg = tracker.load_config()
-    except SystemExit:  # a broken roi.json is not doctor's business
-        cfg = tracker.DEFAULTS
-    sp, cp = seed.model_path(cfg), classifier.model_path(cfg)
-    print(
-        "seed     %s"
-        % (
-            "off"
-            if sp is None
-            else sp + (" ok" if os.path.isfile(sp) else " (downloaded on first use)")
-        )
-    )
-    print(
-        "classif  %s"
-        % (
-            "off"
-            if cp is None
-            else cp
-            + (
-                " ok"
-                if os.path.isfile(cp)
-                else " (none: rules; `imcam train` makes one)"
-            )
-        )
-    )
-    print("notify   %s" % (notify.backend() or "none (messages are only logged)"))
     print("data dir %s" % paths.home())
     return 0 if ok else 1
 
@@ -202,50 +159,20 @@ def main():
         selftest()
         return
     record = _opt(args, "--record")
-    infile = _opt(args, "--input")
     track = _opt(args, "--track", flag=True)
-    auto = _opt(args, "--auto", flag=True)
+    out = _opt(args, "-o")
     if cmd == "doctor":
         sys.exit(doctor())
     if cmd == "extract-keys":
         extract_keys.main(args[1:])
         return
-    if cmd in ("tune", "train"):
-        clips = []
-        while (clip := _opt(args, "--clip")) is not None:
-            clips.append(clip)
-        tol = _opt(args, "--tol")
-        if not clips:
-            raise SystemExit("usage: imcam %s --clip FILE:T1,T2,... [--clip ...]" % cmd)
-        (tune if cmd == "tune" else train).run(clips, float(tol) if tol else 30.0)
-        return
-    if cmd == "calibrate" and auto:
-        if not infile:
-            raise SystemExit(
-                "usage: imcam calibrate --auto --input FILE (live, `imcam monitor` calibrates itself)"
-            )
-        tracker.autocalibrate_file(infile)
-        return
-    if cmd in ("calibrate", "monitor") and infile:  # offline: no network
-        tracker.calibrate(infile) if cmd == "calibrate" else tracker.run_file(infile)
-        return
-    if cmd == "evaluate":
-        wakes, tol, csv_out = (
-            _opt(args, "--wakes"),
-            _opt(args, "--tol"),
-            _opt(args, "--csv"),
+    if cmd in ("calibrate", "evaluate", "tune", "train"):
+        raise SystemExit(
+            "`imcam %s` moved to the separate baby-tracker program: `baby-tracker %s`"
+            % (cmd, cmd)
         )
-        if not infile or wakes is None:
-            raise SystemExit("usage: imcam evaluate --input FILE --wakes T1,T2,...")
-        tracker.evaluate_file(
-            infile,
-            [float(t) for t in wakes.split(",") if t],
-            float(tol) if tol else 30.0,
-            csv_out,
-        )
-        return
-    if cmd == "calibrate":
-        tracker.calibrate()
+    if cmd == "snapshot":
+        print("saved %s" % snapshot.grab(out or "snapshot.png"))
         return
     try:
         config.require(
@@ -303,7 +230,7 @@ def main():
         elif cmd == "monitor":
             if len(args) < 3:
                 raise SystemExit(
-                    "usage: imcam monitor <device-serial> <permit-code> [--record DIR] [--input FILE]"
+                    "usage: imcam monitor <device-serial> <permit-code> [--record DIR]"
                 )
             cloud.ensure_logged_in(c)
             do_monitor(c, args[1], args[2], record)

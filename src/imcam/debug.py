@@ -31,11 +31,6 @@ def nal_in(data):
         print("nal parse error: %r" % e)
 
 
-def autocal(msg):
-    if enabled():
-        print("autocal:", msg)
-
-
 def pli_sent():
     if enabled():
         print("PLI sent")

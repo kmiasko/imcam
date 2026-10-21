@@ -1,7 +1,7 @@
 # imcam
 
 Unofficial Linux/Windows client for ImCam (`com.cylan.chatcam`) baby cameras: live view, recording, and
-"baby is awake" alerts (sitting/standing silhouette inside a crib region you calibrate).
+"baby is awake" alerts (through the separate baby-tracker program).
 
 Not affiliated with the camera vendor. Protocol knowledge comes from interoperability analysis of the
 public Android app; no vendor code or data is included.
@@ -12,30 +12,25 @@ Needs Python 3.10+ and **ffmpeg + ffplay on PATH**
 (Linux: your package manager; Windows: `winget install Gyan.FFmpeg`, then reopen the terminal).
 
     pipx install .          # or: pip install .
-    imcam doctor            # checks ffmpeg, Python deps, notification backend
+    imcam doctor            # checks ffmpeg, Python deps, baby-tracker
 
 ## Use
 
     imcam login <account> <password>
     imcam devlist
     imcam watch <serial> <permit>                 # ffplay window
-    imcam watch <serial> <permit> --track         # ... plus awake tracking
-    imcam calibrate                               # optional hand calibration (with `watch`/`monitor` running): crib corners, then 2 points of the lying head level
-    imcam monitor <serial> <permit> [--record DIR]   # headless, reconnects forever
-    imcam monitor --input rec.mkv                 # replay a recording to tune thresholds
-    imcam evaluate --input rec.mkv --wakes 120,3400   # score alerts vs. labelled wake times (s); --csv dumps observations
+    imcam watch <serial> <permit> --track         # ... plus awake tracking (runs baby-tracker)
+    imcam monitor <serial> <permit> [--record DIR]   # headless, reconnects forever, runs baby-tracker
+    imcam snapshot -o frame.png                   # one frame of the running stream, for baby-tracker calibration
 
-Data (session, `roi.json`, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
-Without a hand calibration, `monitor` self-calibrates: it spends the first `auto_cal_s` (2 min) learning the crib region and the
-baby's lying appearance from the stream, writes the region to `roi.json` (`"calibrated": "auto"`), and recalibrates if the camera moves.
-`imcam tune --clip FILE:T1,T2,...` fits the remaining thresholds on labelled recordings.
-Two optional extras sharpen the self-calibration (without them the behaviour above is unchanged).
-While discovering, a small person detector (OpenCV Zoo YOLOX, Apache-2.0, ~35 MB) is downloaded once to `~/.imcam/models/`
-(sha256-checked; `"seed_model": ""` in `roi.json` turns it off) and its boxes help find the crib when the baby barely moves.
-`imcam train --clip FILE:T1,T2,... [--clip ...]` fits a small per-user classifier on labelled wakes and saves it to
-`~/.imcam/classifier.json` only if its leave-one-clip-out results beat the built-in rules; `"classifier": ""` ignores it.
-`roi.json` is hand-editable; see `DEFAULTS` in `src/imcam/tracker.py` for every setting (`hook` runs a command per alert
-with `IMCAM_EVENT` / `IMCAM_MESSAGE` in its environment).
+Awake tracking, calibration, tuning and training are in the separate
+[baby-tracker](../../baby-tracker) program (`baby-tracker calibrate --image frame.png`, `evaluate`, `tune`, `train`).
+Install it so that `baby-tracker` is on the PATH; `imcam doctor` checks this. `imcam monitor` starts it with
+`~/.imcam/track.sdp` as input and stops it on exit.
+
+Data (session, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
+baby-tracker keeps its own data in `~/.baby-tracker`. Earlier versions kept `roi.json`, `classifier.json` and `models/` in
+`~/.imcam`; they are not migrated, so copy them to `~/.baby-tracker`.
 
 ## Vendor constants
 
@@ -59,10 +54,6 @@ Put the values in environment variables, in `./.env`, or in `~/.imcam/config.env
 
 `imcam login` and the other online commands need `IMCAM_VKEY`; `watch` and `monitor` also need `IMCAM_AES_PREFIX`.
 Without them, imcam stops with an error naming the missing setting. `imcam doctor` shows what is set.
-
-## Notifications
-
-Linux `notify-send`, macOS `osascript`, Windows toast via `winotify`. If none works the alert is still logged.
 
 ## Develop
 
