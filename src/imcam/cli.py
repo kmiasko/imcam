@@ -15,7 +15,6 @@ Commands:
   imcam monitor <serial> <permit> [--record DIR]
                             headless awake-tracking with reconnect (runs the separate `baby-tracker` program)
   imcam snapshot [-o FILE.png]   save one frame of the running watch/monitor stream (for `baby-tracker calibrate --image`)
-  (calibrate / evaluate / tune / train live in baby-tracker)
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
 
@@ -166,11 +165,6 @@ def main():
     if cmd == "extract-keys":
         extract_keys.main(args[1:])
         return
-    if cmd in ("calibrate", "evaluate", "tune", "train"):
-        raise SystemExit(
-            "`imcam %s` moved to the separate baby-tracker program: `baby-tracker %s`"
-            % (cmd, cmd)
-        )
     if cmd == "snapshot":
         print("saved %s" % snapshot.grab(out or "snapshot.png"))
         return

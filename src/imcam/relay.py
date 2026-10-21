@@ -3,7 +3,7 @@ packet is copied to local UDP ports where ffplay and the tracker's ffmpeg read i
 
 Each UDP port has one reader, and sending to a port nobody reads broke playback: only active readers get
 packets. ffmpeg's rtp input also binds port+1 for RTCP, so ports must be at least 2 apart.
-`imcam calibrate` runs in another process; it asks for a one-frame grab on SNAP_PORT by touching SNAP_FLAG,
+`imcam snapshot` runs in another process; it asks for a one-frame grab on SNAP_PORT by touching SNAP_FLAG,
 and the relay (in `watch`/`monitor`) then also feeds that port while the flag is fresh.
 """
 
@@ -19,12 +19,12 @@ from . import debug, paths
 H265_PT = 125  # payload type the device answers with
 RTP_PORT = 47301  # ffplay window (watch)
 TRACK_PORT = 47304  # tracker's ffmpeg: pipe frames + recording
-SNAP_PORT = 47306  # calibrate's one-frame grab
+SNAP_PORT = 47306  # snapshot's one-frame grab
 LIVE_SDP = paths.path("live.sdp")
 TRACK_SDP = paths.path("track.sdp")
 SNAP_SDP = paths.path("snap.sdp")
 SNAP_FLAG = paths.path("snap.want")
-SNAP_FLAG_TTL_S = 120  # a flag older than this is stale (calibrate died)
+SNAP_FLAG_TTL_S = 120  # a flag older than this is stale (snapshot died)
 SNAP_POLL_S = 1.0  # how often the relay re-checks the flag
 PLI_EVERY_S = 5.0
 
@@ -61,7 +61,7 @@ def start_ffplay():
 
 
 class SnapshotFlag:
-    """Cross-process request for a snapshot feed: calibrate holds the flag, the relay polls it."""
+    """Cross-process request for a snapshot feed: snapshot holds the flag, the relay polls it."""
 
     def __init__(self, path=None, mono=time.monotonic, wall=time.time):
         self.path, self.mono, self.wall = path or SNAP_FLAG, mono, wall
