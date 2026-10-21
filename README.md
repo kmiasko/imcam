@@ -12,20 +12,26 @@ Needs Python 3.10+ and **ffmpeg + ffplay on PATH**
 (Linux: your package manager; Windows: `winget install Gyan.FFmpeg`, then reopen the terminal).
 
     pipx install .          # or: pip install .
-    imcam doctor            # checks ffmpeg, Python deps, baby-tracker
+    imcam doctor            # checks ffmpeg, ffplay, baby-tracker, Python deps, vendor constants
 
 ## Use
 
     imcam login <account> <password>
     imcam devlist
+    imcam account                                 # account info
+    imcam logout
     imcam watch <serial> <permit>                 # ffplay window
     imcam watch <serial> <permit> --track         # ... plus awake tracking (runs baby-tracker)
+    imcam watch <serial> <permit> --record DIR    # ... recording via baby-tracker (also starts it)
     imcam monitor <serial> <permit> [--record DIR]   # headless, reconnects forever, runs baby-tracker
     imcam snapshot -o frame.png                   # one frame of the running stream, for baby-tracker calibration
 
+Other commands: `code-get <account>`, `code-check <account> <code> [token]`, `register <account> <password> <code> [token] [country]`
+(account creation), `call <msgid> [json-body]` (raw cloud request), `selftest` (runs the test suite from a source checkout).
+
 Awake tracking is done by the separate [baby-tracker](https://github.com/kmiasko/baby-tracker) program, which has its own commands
 (calibration, evaluation, tuning, training). Install it so that `baby-tracker` is on the PATH; `imcam doctor` checks this. `imcam monitor` starts it with
-`~/.imcam/track.sdp` as input and stops it on exit.
+`~/.imcam/track.sdp` as input and stops it on exit; if it exits earlier, `monitor` starts it again.
 
 Data (session, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
 baby-tracker keeps its own data in `~/.baby-tracker`.
