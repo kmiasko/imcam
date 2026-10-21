@@ -29,6 +29,11 @@ Data (session, `roi.json`, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam
 Without a hand calibration, `monitor` self-calibrates: it spends the first `auto_cal_s` (2 min) learning the crib region and the
 baby's lying appearance from the stream, writes the region to `roi.json` (`"calibrated": "auto"`), and recalibrates if the camera moves.
 `imcam tune --clip FILE:T1,T2,...` fits the remaining thresholds on labelled recordings.
+Two optional extras sharpen the self-calibration (without them the behaviour above is unchanged).
+While discovering, a small person detector (OpenCV Zoo YOLOX, Apache-2.0, ~35 MB) is downloaded once to `~/.imcam/models/`
+(sha256-checked; `"seed_model": ""` in `roi.json` turns it off) and its boxes help find the crib when the baby barely moves.
+`imcam train --clip FILE:T1,T2,... [--clip ...]` fits a small per-user classifier on labelled wakes and saves it to
+`~/.imcam/classifier.json` only if its leave-one-clip-out results beat the built-in rules; `"classifier": ""` ignores it.
 `roi.json` is hand-editable; see `DEFAULTS` in `src/imcam/tracker.py` for every setting (`hook` runs a command per alert
 with `IMCAM_EVENT` / `IMCAM_MESSAGE` in its environment).
 

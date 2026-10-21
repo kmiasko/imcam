@@ -5,7 +5,9 @@ AutoDetector replaces the hand-drawn roi/lying_line of tracker.py:
   1. discover: for `auto_cal_s` seconds a whole-frame BgSubDetector runs while a heatmap of where the
      foreground (the baby moving about) keeps showing up is accumulated. Global events (foreground over
      `auto_global_frac` of the frame: an adult, lights) are skipped. Every blob's size also seeds a
-     Baseline of the baby's lying appearance (assumed mostly lying while we watch).
+     Baseline of the baby's lying appearance (assumed mostly lying while we watch). With a person seeder
+     (seed.py) a second heat layer from detected person boxes, sampled every `seed_every_s`, confirms the
+     hull where it overlaps the foreground and rescues it when the baby barely moves; no boxes = no change.
   2. run: a BgSubDetector inside the discovered ROI judges "upright" relative to the Baseline (blob height
      and rise above the lying top, in units of the lying blob's width), and refreshes the Baseline from
      its own "lying" observations.
@@ -20,7 +22,7 @@ numpy/cv2 are imported lazily, like tracker.py.
 import collections
 import statistics
 
-from . import debug, tracker
+from . import classifier, debug, tracker
 from .tracker import Obs
 
 
@@ -60,10 +62,12 @@ class Discovery:
         self.cfg, self.np, self.cv2 = cfg, np, cv2
         self.w, self.h = cfg["frame_w"], cfg["frame_h"]
         self.heat = np.zeros((self.h, self.w), np.float32)
+        self.box_heat = np.zeros((self.h, self.w), np.float32)
         self.baseline = Baseline(cfg["auto_min_samples"])
         self.n = self.useful = 0
 
-    def feed(self, fg, blob):
+    def feed(self, fg, blob, boxes=None):
+        """boxes: normalized person boxes if the seeder ran on this frame, else None."""
         self.n += 1
         if fg is None:
             return
@@ -72,6 +76,10 @@ class Discovery:
             return  # adult / lights: not the baby's footprint
         self.useful += 1
         self.heat += fg > 0
+        for x0, y0, x1, y1 in boxes or ():
+            self.box_heat[
+                int(y0 * self.h) : int(y1 * self.h), int(x0 * self.w) : int(x1 * self.w)
+            ] += 1
         if blob and blob[4] >= 0.002 * self.w * self.h:
             x, y, w, h, area = blob
             self.baseline.add(y, w, h, area, seed=True)
@@ -80,17 +88,39 @@ class Discovery:
         need = self.cfg["auto_cal_s"] * self.cfg["fps"]
         return self.n >= need and self.baseline.ready and self.roi() is not None
 
-    def roi(self):
-        """Normalized polygon: hull of the persistent foreground, grown sideways/downward by
-        `auto_roi_margin` and upward by one lying-blob width (an upright baby must stay inside)."""
+    def _stable(self, heat, rel, floor=2.0):
+        """Contours (area-filtered) of where `heat` stays above max(floor, rel x its peak)."""
         cv2, np = self.cv2, self.np
-        peak = float(self.heat.max())
-        if peak < 2:
-            return None
-        m = (self.heat >= max(2.0, 0.2 * peak)).astype(np.uint8) * 255
+        peak = float(heat.max())
+        if peak < floor:
+            return []
+        m = (heat >= max(floor, rel * peak)).astype(np.uint8) * 255
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
         cnts = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
-        cnts = [c for c in cnts if cv2.contourArea(c) >= 0.002 * self.w * self.h]
+        return [c for c in cnts if cv2.contourArea(c) >= 0.002 * self.w * self.h]
+
+    def roi(self):
+        """Normalized polygon: hull of the persistent foreground, grown sideways/downward by
+        `auto_roi_margin` and upward by one lying-blob width (an upright baby must stay inside).
+        Person boxes that overlap the foreground are added to it; without usable foreground they seed it."""
+        cv2, np = self.cv2, self.np
+        fg = self._stable(self.heat, 0.2)
+        box = self._stable(self.box_heat, 0.3)
+        if fg and box:
+            fgm = np.zeros((self.h, self.w), np.uint8)
+            cv2.drawContours(fgm, fg, -1, 255, -1)
+            bm = np.zeros((self.h, self.w), np.uint8)
+            cv2.drawContours(bm, box, -1, 255, -1)
+            if cv2.countNonZero(cv2.bitwise_and(fgm, bm)):
+                debug.autocal("person boxes confirm the foreground footprint")
+                cnts = fg + box
+            else:
+                cnts = fg  # a box elsewhere (adult, toy): ignored
+        elif box:
+            debug.autocal("person boxes seed the roi (little foreground)")
+            cnts = box
+        else:
+            cnts = fg
         if not cnts:
             return None
         pts = np.vstack(cnts)[:, 0, :].astype(np.float32)
@@ -145,15 +175,18 @@ class DriftCheck:
 
 class AutoDetector(tracker.Detector):
     """Detector that calibrates itself; reports Obs("calibrating") while discovering.
-    on_roi(roi) is told each discovered ROI (to persist it); not called for a pinned ROI."""
+    on_roi(roi) is told each discovered ROI (to persist it); not called for a pinned ROI.
+    seeder: optional person detector (seed.py) consulted every `seed_every_s` while discovering."""
 
-    def __init__(self, cfg, on_roi=None):
+    def __init__(self, cfg, on_roi=None, seeder=None):
         import cv2
         import numpy as np
 
-        self.cv2, self.np, self.on_roi = cv2, np, on_roi
+        self.cv2, self.np, self.on_roi, self.seeder = cv2, np, on_roi, seeder
+        self.seed_every = max(1, int(cfg["seed_every_s"] * cfg["fps"]))
         # relative mode needs lying_line off even if roi.json has a stale auto one
         self.cfg = dict(cfg, lying_line=None)
+        self.model = classifier.load(cfg)
         self.pinned = cfg["roi"] if cfg["calibrated"] != "auto" else None
         self.drift = DriftCheck(cv2, np, cfg["drift_px"])
         self.drift_every = max(1, int(cfg["drift_check_s"] * cfg["fps"]))
@@ -172,10 +205,17 @@ class AutoDetector(tracker.Detector):
         self.drift.reset()
         roi = self.pinned or self.disc.roi()
         base = self.disc.baseline
-        self.run = tracker.BgSubDetector(self.cfg, baseline=base, roi=roi)
+        self.run = tracker.BgSubDetector(
+            self.cfg, baseline=base, roi=roi, model=self.model
+        )
         debug.autocal("roi=%s baseline top=%.0f w=%.0f" % (roi, base.top, base.width))
         if self.on_roi and not self.pinned:
             self.on_roi(roi)
+
+    @property
+    def last_features(self):
+        """Classifier features of the latest judged blob (None while calibrating / no blob)."""
+        return self.run.last_features if self.run is not None else None
 
     def analyze(self, frame):
         cv2, cfg = self.cv2, self.cfg
@@ -201,7 +241,10 @@ class AutoDetector(tracker.Detector):
         if obs.kind == "reset":
             self.drift.reset()
         if obs.kind not in ("warmup", "reset"):
-            self.disc.feed(self.inner.last_fg, self.inner.last_blob)
+            boxes = None
+            if self.seeder is not None and self.frames % self.seed_every == 0:
+                boxes = self.seeder.boxes(frame)
+            self.disc.feed(self.inner.last_fg, self.inner.last_blob, boxes)
             if self.disc.ready():
                 self._settle()
         return Obs("calibrating")

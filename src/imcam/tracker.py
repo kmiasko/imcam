@@ -37,6 +37,11 @@ DEFAULTS = {
     "auto_global_frac": 0.35,  # self-calibration: foreground above this frame fraction (adult, lights) is ignored
     "auto_roi_margin": 0.25,  # self-calibration: sideways/downward growth of the discovered footprint
     "auto_min_samples": 20,  # lying-blob samples needed before the baseline is trusted
+    "seed_model": "auto",  # person detector hinting the roi during discovery: "auto" (downloaded once), "" off, or an .onnx path
+    "seed_every_s": 1.0,  # how often the person detector runs while discovering
+    "seed_conf": 0.4,  # person detector confidence floor
+    "classifier": "auto",  # "auto" = use ~/.imcam/classifier.json (imcam train) when present, "" = rules only
+    "train_window_s": 15.0,  # imcam train: frames from a labelled wake to this many seconds later are "upright"
     "drift_px": 12.0,  # camera shift (px at frame_w) that drops the calibration
     "drift_check_s": 10.0,  # how often to check for camera movement
     "outside_frac": 0.02,  # foreground outside ROI (fraction of frame) pauses detection
@@ -106,9 +111,15 @@ def validate_config(cfg):
         "auto_min_samples",
         "drift_px",
         "drift_check_s",
+        "seed_every_s",
+        "seed_conf",
+        "train_window_s",
     ):
         if not isinstance(cfg[k], (int, float)) or cfg[k] <= 0:
             raise SystemExit("%s must be a positive number" % k)
+    for k in ("seed_model", "classifier"):
+        if not isinstance(cfg[k], str):
+            raise SystemExit('%s must be a string ("auto", "" or a path)' % k)
     return cfg
 
 
@@ -180,6 +191,7 @@ Obs = collections.namedtuple("Obs", "kind top ratio area")
 # kind: calibrating | warmup | reset | paused | empty | lying | upright
 Obs.__new__.__defaults__ = (None, None, None)
 FULL_ROI = [[0, 0], [1, 0], [1, 1], [0, 1]]
+PERSIST_S = 5.0  # window of the classifier's persistence feature
 
 
 class Detector:
@@ -192,21 +204,30 @@ class Detector:
 class BgSubDetector(Detector):
     """Foreground blob inside the ROI -> Obs. With a `lying_line` in cfg, "upright" is judged against that
     hand-drawn line; otherwise against `baseline` (autocal.Baseline), the baby's own lying appearance, which
-    this detector keeps refreshing from its "lying" observations. The last frame's foreground mask and
-    blob (x, y, w, h, area px) stay in `last_fg` / `last_blob` for autocal's discovery."""
+    this detector keeps refreshing from its "lying" observations. With a trained `model`
+    (classifier.Model) the relative rule is replaced by its verdict on `last_features`. The last frame's
+    foreground mask and blob (x, y, w, h, area px) stay in `last_fg` / `last_blob` for autocal's discovery;
+    `last_features` (classifier.FEATURES order, scale-free) is set whenever a blob was judged against a baseline."""
 
-    def __init__(self, cfg, baseline=None, roi=None):
+    def __init__(self, cfg, baseline=None, roi=None, model=None):
         import cv2
         import numpy as np
 
         self.cv2, self.np, self.cfg, self.baseline = cv2, np, cfg, baseline
+        self.model = model
         self.w, self.h = cfg["frame_w"], cfg["frame_h"]
-        self.last_fg = self.last_blob = None
+        self.last_fg = self.last_blob = self.last_features = None
+        self._prev_in = None  # last frame's in-ROI foreground (motion feature)
+        self._seen = collections.deque(
+            maxlen=max(1, int(PERSIST_S * cfg["fps"]))
+        )  # 1.0 per recent frame with a raised blob
         roi = roi or cfg["roi"] or FULL_ROI
         poly = np.array([[x * self.w, y * self.h] for x, y in roi], np.int32)
         self.roi_mask = np.zeros((self.h, self.w), np.uint8)
         cv2.fillPoly(self.roi_mask, [poly], 255)
         self.roi_area = max(1, int(cv2.countNonZero(self.roi_mask)))
+        ys = np.nonzero(self.roi_mask.any(axis=1))[0]
+        self.roi_top, self.roi_h = int(ys[0]), max(1, int(ys[-1] - ys[0] + 1))
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         self.prev = None
         self.upright = False  # last observation was upright: the model is frozen
@@ -231,7 +252,7 @@ class BgSubDetector(Detector):
 
     def _analyze(self, frame):
         cv2, np, cfg = self.cv2, self.np, self.cfg
-        self.last_fg = self.last_blob = None
+        self.last_fg = self.last_blob = self.last_features = None
         if frame.shape[:2] != (self.h, self.w):
             frame = cv2.resize(frame, (self.w, self.h))
         stats = self._stats(frame)
@@ -256,11 +277,17 @@ class BgSubDetector(Detector):
         outside = cv2.countNonZero(cv2.bitwise_and(fg, cv2.bitwise_not(self.roi_mask)))
         if outside > cfg["outside_frac"] * self.w * self.h:
             return Obs("paused")
-        inside = cv2.dilate(
-            cv2.bitwise_and(fg, self.roi_mask), self.kernel, iterations=2
+        fg_in = cv2.bitwise_and(fg, self.roi_mask)
+        changed = (
+            cv2.countNonZero(cv2.bitwise_xor(fg_in, self._prev_in))
+            if self._prev_in is not None
+            else 0
         )
+        self._prev_in = fg_in
+        inside = cv2.dilate(fg_in, self.kernel, iterations=2)
         cnts = cv2.findContours(inside, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
         if not cnts:
+            self._seen.append(0.0)
             return Obs("empty")
         c = max(cnts, key=cv2.contourArea)
         area_px = cv2.contourArea(c)
@@ -273,6 +300,7 @@ class BgSubDetector(Detector):
             if area < cfg["min_blob_frac"]:
                 return Obs("empty")
         elif area_px < cfg["min_area_ratio"] * bl.area:
+            self._seen.append(0.0)
             return Obs("empty")
         top, ratio = y / self.h, h / max(1, w)
         if manual:
@@ -285,10 +313,24 @@ class BgSubDetector(Detector):
             )
         elif bl is not None and bl.ready:
             # scale-free: heights and rises in units of the baby's own lying-blob width
-            upright = (
-                h > cfg["lying_len_mult"] * bl.width
-                or bl.top - y >= cfg["rise_mult"] * bl.width
+            rise = (bl.top - y) / bl.width
+            self._seen.append(1.0 if rise > 0 else 0.0)
+            self.last_features = (
+                h / bl.width,
+                rise,
+                area_px / bl.area,
+                ratio,
+                changed / max(1.0, area_px),
+                sum(self._seen) / self._seen.maxlen,
+                (y - self.roi_top) / self.roi_h,
             )
+            if self.model is not None:
+                upright = self.model.upright(self.last_features)
+            else:
+                upright = (
+                    h > cfg["lying_len_mult"] * bl.width
+                    or bl.top - y >= cfg["rise_mult"] * bl.width
+                )
         else:
             upright = False  # no baseline yet: never guess
         if not upright and bl is not None and not manual:
@@ -300,9 +342,9 @@ def make_detector(cfg, on_roi=None):
     """BgSubDetector with a hand calibration (lying_line, not marked auto); autocal.AutoDetector otherwise."""
     if cfg["lying_line"] is not None and cfg["calibrated"] != "auto":
         return BgSubDetector(cfg)
-    from . import autocal
+    from . import autocal, seed
 
-    return autocal.AutoDetector(cfg, on_roi)
+    return autocal.AutoDetector(cfg, on_roi, seeder=seed.make_seeder(cfg))
 
 
 class Tracker:

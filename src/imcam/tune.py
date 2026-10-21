@@ -94,9 +94,8 @@ def fit(clips, base_cfg, tol_s=30.0, detector_grid=None, tracker_grid=None):
     return params(best(everyone)), held
 
 
-def run(clip_specs, tol_s=30.0, out=print):
-    """clip_specs: ["FILE:T1,T2,...", ...] as given to --clip."""
-    base = tracker.load_config()
+def load_clips(clip_specs, base):
+    """[(frames_factory, wakes)] from ["FILE:T1,T2,...", ...] as given to --clip."""
     clips = []
     for spec in clip_specs:
         path, _, w = spec.rpartition(":")
@@ -104,6 +103,13 @@ def run(clip_specs, tol_s=30.0, out=print):
             raise SystemExit("--clip needs FILE:T1,T2,... (wake times in seconds)")
         wakes = [float(t) for t in w.split(",") if t]
         clips.append((lambda p=path: tracker.file_frames(p, base), wakes))
+    return clips
+
+
+def run(clip_specs, tol_s=30.0, out=print):
+    """clip_specs: ["FILE:T1,T2,...", ...] as given to --clip."""
+    base = tracker.load_config()
+    clips = load_clips(clip_specs, base)
     best, held = fit(clips, base, tol_s)
     for i, p, r in held:
         out("held out %s: %s -> %s" % (clip_specs[i], p, r))
