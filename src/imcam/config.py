@@ -14,6 +14,14 @@ SETTINGS = {
 }
 
 
+# optional settings, same lookup; the value is the default
+OPTIONAL = {
+    "IMCAM_NOTIFY_HOOK": "",  # command run on every alert; env IMCAM_EVENT / IMCAM_MESSAGE
+    "IMCAM_NOTIFY_COOLDOWN": "600",  # minimum seconds between "baby is up" alerts
+    "IMCAM_STREAM_LOST_S": "60",  # no video for this long -> "stream lost" alert
+}
+
+
 class ConfigMissing(Exception):
     """A required vendor constant is not configured."""
 
@@ -58,6 +66,17 @@ def get(name):
         'See the README section "Vendor constants".'
         % (name, SETTINGS[name], paths.path("config.env"), name)
     )
+
+
+def optional(name):
+    """Value of an OPTIONAL setting, or its default."""
+    if os.environ.get(name):
+        return os.environ[name]
+    for path in env_files():
+        v = _parse(path).get(name)
+        if v:
+            return v
+    return OPTIONAL[name]
 
 
 def require(*names):

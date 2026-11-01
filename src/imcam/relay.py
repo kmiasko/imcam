@@ -1,5 +1,5 @@
 """RTP relay: the camera's H.265 video arrives over WebRTC (aiortc has no H.265 codec), so each decrypted RTP
-packet is copied to local UDP ports where ffplay and the tracker's ffmpeg read it through SDP files.
+packet is copied to local UDP ports where ffplay and watcher.py's bridge ffmpeg read it through SDP files.
 
 Each UDP port has one reader, and sending to a port nobody reads broke playback: only active readers get
 packets. ffmpeg's rtp input also binds port+1 for RTCP, so ports must be at least 2 apart.
@@ -11,14 +11,13 @@ import contextlib
 import os
 import socket
 import struct
-import subprocess
 import time
 
-from . import debug, paths
+from . import children, debug, paths
 
 H265_PT = 125  # payload type the device answers with
 RTP_PORT = 47301  # ffplay window (watch)
-TRACK_PORT = 47304  # tracker's ffmpeg: pipe frames + recording
+TRACK_PORT = 47304  # watcher's bridge ffmpeg: babywatch feed + recording
 SNAP_PORT = 47306  # snapshot's one-frame grab
 LIVE_SDP = paths.path("live.sdp")
 TRACK_SDP = paths.path("track.sdp")
@@ -43,7 +42,7 @@ def write_sdp(path, port):
 
 def start_ffplay():
     path = write_sdp(LIVE_SDP, RTP_PORT)
-    return subprocess.Popen(
+    return children.popen(
         [
             paths.require_tool("ffplay"),
             "-loglevel",
@@ -99,6 +98,7 @@ class Relay:
         self.snapshot = snapshot or SnapshotFlag()
         self.mono, self.log = mono, log
         self.seen, self._last_pli = 0, None
+        self.last_rx = None  # mono() of the latest H.265 packet, for stream-lost alerts
         if send is None:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             send = lambda data, port: sock.sendto(data, ("127.0.0.1", port))
@@ -118,6 +118,7 @@ class Relay:
             self.log("receiving H.265 video (%d packets so far)" % self.seen)
         self.seen += 1
         debug.nal_in(data)
+        self.last_rx = self.mono()
         for port in self.targets():
             self._send(data, port)
         # aiortc can't decode H.265, so the receiver never asks the camera for a keyframe. Request one now

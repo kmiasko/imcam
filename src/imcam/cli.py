@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ImCam (com.cylan.chatcam) Linux/Windows client: command dispatch, the WebRTC call and the monitor loop.
-(Cloud protocol: cloud.py. Video relay: relay.py. Awake tracking: the separate baby-tracker program.)
+(Cloud protocol: cloud.py. Video relay: relay.py. Wake alerts: the separate babywatch program, watcher.py.)
 
 Commands:
   imcam selftest | doctor
@@ -13,8 +13,8 @@ Commands:
   imcam call <msgid> [json-body]
   imcam watch <serial> <permit> [--track] [--record DIR]   (ffplay window)
   imcam monitor <serial> <permit> [--record DIR]
-                            headless awake-tracking with reconnect (runs the separate `baby-tracker` program)
-  imcam snapshot [-o FILE.png]   save one frame of the running watch/monitor stream (for `baby-tracker calibrate --image`)
+                            headless wake alerts with reconnect (runs the separate `babywatch` program)
+  imcam snapshot [-o FILE.png]   save one frame of the running watch/monitor stream (for `babywatch set-roi --ref`)
   (needs ffmpeg/ffplay on PATH; `imcam doctor` checks the installation)
 """
 
@@ -25,43 +25,47 @@ import time
 
 from . import (
     call,
+    children,
     cloud,
     config,
     extract_keys,
+    notify,
     paths,
     relay,
     snapshot,
-    tracker_proc,
+    watcher,
 )
 
 
 def do_watch(c, serial, permit, track=False, record=None):
     """Sign in to the /im signaling server, send a WebRTC callRequest to the device
     and show the incoming video in ffplay until Ctrl-C. Needs aiortc (~/.imcam/venv).
-    --track / --record also feed the stream to baby-tracker."""
-    relay.install((relay.RTP_PORT,) + ((relay.TRACK_PORT,) if record or track else ()))
-    player = relay.start_ffplay()
-    live = _start_tracker(record, track)
+    --track runs babywatch on the stream; --record (which also starts it) saves .mkv segments."""
+    r = relay.install(
+        (relay.RTP_PORT,) + ((relay.TRACK_PORT,) if record or track else ())
+    )
+    player, live = relay.start_ffplay(), None
     try:
+        live = _start_tracker(record, track, r)
         call.call_once(c, serial, permit)
     except KeyboardInterrupt:
         pass
     finally:
-        player.terminate()
+        children.stop(player)
         if live:
             live.stop()
 
 
-def _start_tracker(record, track):
+def _start_tracker(record, track, r=None):
     if not (record or track):
         return None
-    return tracker_proc.TrackerProcess(record)
+    return watcher.WatchProcess(record, rx=(lambda: r.last_rx) if r else None)
 
 
 def do_monitor(c, serial, permit, record=None):
     """Headless: no ffplay, tracking on, reconnects forever with exponential backoff (cap 30 s)."""
-    relay.install((relay.TRACK_PORT,))
-    live = _start_tracker(record, True)
+    r = relay.install((relay.TRACK_PORT,))
+    live = _start_tracker(record, True, r)
     backoff = 1
     try:
         while True:
@@ -75,7 +79,6 @@ def do_monitor(c, serial, permit, record=None):
                 raise  # retrying cannot fix this
             except (Exception, SystemExit) as e:
                 print("monitor: %s" % (e or type(e).__name__), file=sys.stderr)
-            live.ensure_running()
             # a call that lived a while means the link was good: start backing off from scratch
             backoff = 1 if time.monotonic() - started > 60 else min(backoff * 2, 30)
             print("monitor: reconnecting in %ds" % backoff, file=sys.stderr)
@@ -110,7 +113,7 @@ def doctor():
     for tool, need in (
         ("ffmpeg", "watch/monitor"),
         ("ffplay", "watch"),
-        ("baby-tracker", "monitor/--track/--record"),
+        ("babywatch", "monitor/--track/--record"),
     ):
         found = __import__("shutil").which(tool)
         print("%-12s %s" % (tool, found or "MISSING (needed for %s)" % need))
@@ -129,6 +132,12 @@ def doctor():
         except config.ConfigMissing as e:
             print("%-8s %s MISSING\n%s" % ("config", name, e))
             ok = False
+    print(
+        "%-8s %s"
+        % ("notify", notify.backend() or "no desktop backend (alerts only logged)")
+    )
+    for name in config.OPTIONAL:
+        print("%-8s %s=%r" % ("config", name, config.optional(name)))
     print("data dir %s" % paths.home())
     return 0 if ok else 1
 
@@ -149,7 +158,14 @@ def _opt(args, name, flag=False):
 
 
 def main():
-    args = sys.argv[1:]
+    children.install()
+    try:
+        _main(sys.argv[1:])
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+def _main(args):
     if not args or args[0] == "help":
         print(__doc__)
         sys.exit(1)

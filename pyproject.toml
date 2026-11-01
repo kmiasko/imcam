@@ -13,6 +13,7 @@ authors = [{ name = "Krzysztof Miąsko" }]
 dependencies = [
     "aiortc>=1.9",
     "av>=12",
+    "winotify>=1.1; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

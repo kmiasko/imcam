@@ -1,4 +1,4 @@
-"""Per-user data directory and external tool lookup, shared by cli and tracker."""
+"""Per-user data directory and external tool lookup, shared by cli, relay and watcher."""
 
 import os
 import shutil

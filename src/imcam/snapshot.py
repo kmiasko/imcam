@@ -1,11 +1,11 @@
-"""`imcam snapshot`: save one frame of the live stream as a PNG (for `baby-tracker calibrate --image`).
+"""`imcam snapshot`: save one frame of the live stream as a PNG (e.g. as a babywatch reference frame: `babywatch set-roi --ref`).
 
 Runs in a separate process from `watch`/`monitor`: it touches SNAP_FLAG so the relay also feeds SNAP_PORT, then
 ffmpeg grabs one key frame from it."""
 
 import subprocess
 
-from . import paths, relay
+from . import children, paths, relay
 
 
 def grab(out_path, timeout=40):
@@ -25,11 +25,14 @@ def grab(out_path, timeout=40):
         "1",
         out_path,
     ]
-    try:
-        with relay.SnapshotFlag().request():
-            code = subprocess.run(cmd, timeout=timeout).returncode
-    except subprocess.TimeoutExpired:
-        code = 1
+    with relay.SnapshotFlag().request():
+        proc = children.popen(cmd)
+        try:
+            code = proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            code = 1
+        finally:
+            children.stop(proc)
     if code:
         raise SystemExit(
             "no frame from the live stream; run `imcam watch` or `monitor` first"
