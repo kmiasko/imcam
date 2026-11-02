@@ -74,6 +74,7 @@ go in the same places as the vendor constants below (environment, `./.env`, `~/.
 | `IMCAM_STREAM_LOST_S` | 60 | Seconds without video before `stream_lost` |
 | `IMCAM_AUDIO_ANALYZER` | (none) | Command run on the audio stream (URL appended; split like the hook). Its JSON lines become events. |
 | `IMCAM_PLAYER` | (none) | `watch` player instead of ffplay (path of `~/.imcam/live.sdp` appended; split like the hook), e.g. `mpv --demuxer-lavf-o=protocol_whitelist=[file,udp,rtp] --profile=low-latency --untimed` |
+| `IMCAM_LOG_PACKETS` | (off) | Set to `1` to log "receiving H.265 video / audio (N packets so far)" every 500 packets |
 
 ### Event log
 

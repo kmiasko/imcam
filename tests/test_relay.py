@@ -24,7 +24,7 @@ class FakeSnapshot:
         return self._wanted
 
 
-def make_relay(ports=(relay.RTP_PORT,), snapshot=None, clock=None):
+def make_relay(ports=(relay.RTP_PORT,), snapshot=None, clock=None, progress=False):
     sent, logs = [], []
     r = relay.Relay(
         ports,
@@ -32,6 +32,7 @@ def make_relay(ports=(relay.RTP_PORT,), snapshot=None, clock=None):
         snapshot=snapshot or FakeSnapshot(),
         mono=clock or Clock(),
         log=logs.append,
+        progress=progress,
     )
     return r, sent, logs
 
@@ -122,8 +123,15 @@ def test_keyframe_request_is_due_first_then_every_five_seconds():
     assert r.on_rtp(rtp(ssrc=7)) == 7
 
 
-def test_progress_is_logged_every_500_packets():
+def test_progress_is_not_logged_by_default():
     r, _, logs = make_relay()
+    for _ in range(501):
+        r.on_rtp(rtp())
+    assert logs == []
+
+
+def test_progress_is_logged_every_500_packets():
+    r, _, logs = make_relay(progress=True)
     for _ in range(501):
         r.on_rtp(rtp())
     assert [line.split("(")[1] for line in logs] == [

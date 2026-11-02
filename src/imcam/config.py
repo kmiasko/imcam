@@ -21,6 +21,7 @@ OPTIONAL = {
     "IMCAM_STREAM_LOST_S": "60",  # no video for this long -> "stream lost" alert
     "IMCAM_AUDIO_ANALYZER": "",  # command run on the audio stream (URL appended); prints JSON events
     "IMCAM_PLAYER": "",  # `watch` player command instead of ffplay (live.sdp path appended)
+    "IMCAM_LOG_PACKETS": "",  # set (not 0) to log relay progress every 500 packets
 }
 
 

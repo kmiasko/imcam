@@ -132,8 +132,17 @@ class Relay:
     the SSRC to send a keyframe request (PLI) for when one is due, else None; the caller sends it.
     on_answer(sdp) learns the negotiated audio payload type from each call's answer."""
 
-    def __init__(self, ports, send=None, snapshot=None, mono=time.monotonic, log=print):
+    def __init__(
+        self,
+        ports,
+        send=None,
+        snapshot=None,
+        mono=time.monotonic,
+        log=print,
+        progress=False,
+    ):
         self.ports = tuple(ports)
+        self.progress = progress  # log "receiving ... packets so far" every 500 packets
         self.snapshot = snapshot or SnapshotFlag()
         self.mono, self.log = mono, log
         self.seen, self._last_pli = 0, None
@@ -173,7 +182,7 @@ class Relay:
             self.log("camera audio: %d %s" % self.audio)
 
     def _on_audio(self, data):
-        if self.audio_seen % 500 == 0:
+        if self.progress and self.audio_seen % 500 == 0:
             self.log("receiving audio (%d packets so far)" % self.audio_seen)
         self.audio_seen += 1
         self.last_audio_rx = self.mono()
@@ -188,7 +197,7 @@ class Relay:
             return None
         if not self.is_h265(data):
             return None
-        if self.seen % 500 == 0:
+        if self.progress and self.seen % 500 == 0:
             self.log("receiving H.265 video (%d packets so far)" % self.seen)
         self.seen += 1
         debug.nal_in(data)
@@ -220,7 +229,7 @@ def install(ports):
     )
     from . import call
 
-    relay = Relay(ports)
+    relay = Relay(ports, progress=config.optional("IMCAM_LOG_PACKETS") not in ("", "0"))
     call.on_answer = relay.on_answer
     orig = RTCDtlsTransport._handle_rtp_data
 
