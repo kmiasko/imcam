@@ -2,7 +2,7 @@
 
 babywatch reads video only through PyAV from files or stream URLs, and it cannot open the relay's RTP .sdp. A
 bridge ffmpeg therefore reads TRACK_SDP and copies the H.265 into MPEG-TS on a local UDP port (BRIDGE_URL), which
-`babywatch live --rtsp` reads. The same ffmpeg copies the camera's audio (Opus) into MPEG-TS on AUDIO_URL, the
+`babywatch live --rtsp` reads. The same ffmpeg encodes the camera's audio (PCMU, which MPEG-TS can't carry) to Opus in MPEG-TS on AUDIO_URL, the
 audio stream for external consumers, and writes the --record segments (video and audio). UDP output needs no
 reader: with nobody on AUDIO_URL the packets are dropped.
 
@@ -40,7 +40,7 @@ CHECK_S = 2.0  # supervisor period
 
 
 def bridge_command(record=None):
-    """ffmpeg argv: TRACK_SDP video -> MPEG-TS on BRIDGE_PORT, audio -> MPEG-TS on AUDIO_PORT, plus 10-minute
+    """ffmpeg argv: TRACK_SDP video -> MPEG-TS on BRIDGE_PORT, audio -> Opus MPEG-TS on AUDIO_PORT, plus 10-minute
     .mkv segments (video and audio) in `record`."""
     cmd = [
         paths.require_tool("ffmpeg"),
@@ -62,7 +62,9 @@ def bridge_command(record=None):
         "-map",
         "0:a?",
         "-c",
-        "copy",
+        "libopus",
+        "-b:a",
+        "32k",
         "-f",
         "mpegts",
         AUDIO_URL + "?pkt_size=1316",

@@ -59,9 +59,9 @@ def test_audio_codec_is_read_from_the_answer():
 def test_negotiated_audio_goes_to_the_audio_ports_and_not_to_aiortc():
     clock = Clock()
     r, sent, _ = make_relay(ports=(relay.RTP_PORT, relay.TRACK_PORT), clock=clock)
-    pkt = rtp(pt=111)
+    pkt = rtp(pt=0)
     assert not r.consumes(pkt)  # before the answer: unknown, left to aiortc
-    r.on_answer(ANSWER % "111 0")
+    r.on_answer(ANSWER % "0")
     assert r.consumes(pkt) and r.on_rtp(pkt) is None
     assert sent == [
         (relay.RTP_PORT + relay.AUDIO_OFFSET, pkt),
@@ -72,9 +72,9 @@ def test_negotiated_audio_goes_to_the_audio_ports_and_not_to_aiortc():
 
 def test_audio_in_another_codec_than_the_readers_expect_is_dropped():
     r, sent, logs = make_relay()
-    r.on_answer(ANSWER % "0")
-    assert r.consumes(rtp(pt=0))
-    r.on_rtp(rtp(pt=0))
+    r.on_answer(ANSWER % "111 0")
+    assert r.consumes(rtp(pt=111))
+    r.on_rtp(rtp(pt=111))
     assert sent == [] and "not relayed" in logs[0]
 
 
@@ -171,5 +171,22 @@ def test_write_sdp_describes_the_forwarded_stream(tmp_path):
 def test_write_sdp_adds_audio_two_ports_up(tmp_path):
     path = relay.write_sdp(str(tmp_path / "x.sdp"), 47304, relay.AUDIO)
     sdp = open(path).read()
-    assert sdp.index("m=video 47304") < sdp.index("m=audio 47306 RTP/AVP 111")
-    assert "a=rtpmap:111 opus/48000/2" in sdp
+    assert sdp.index("m=video 47304") < sdp.index("m=audio 47306 RTP/AVP 0")
+    assert "a=rtpmap:0 PCMU/8000" in sdp
+
+
+def test_player_is_ffplay_by_default(monkeypatch):
+    monkeypatch.delenv("IMCAM_PLAYER", raising=False)
+    monkeypatch.setattr(relay.config, "env_files", lambda: [])
+    monkeypatch.setattr(relay.paths, "require_tool", lambda name: name)
+    cmd = relay.player_command("live.sdp")
+    assert cmd[0] == "ffplay" and cmd[-2:] == ["-i", "live.sdp"]
+
+
+def test_imcam_player_replaces_ffplay_with_the_sdp_appended(monkeypatch):
+    monkeypatch.setenv("IMCAM_PLAYER", "mpv --profile=low-latency")
+    assert relay.player_command("live.sdp") == [
+        "mpv",
+        "--profile=low-latency",
+        "live.sdp",
+    ]

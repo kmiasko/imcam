@@ -13,14 +13,15 @@ and the relay (in `watch`/`monitor`) then also feeds that port while the flag is
 
 import contextlib
 import os
+import shlex
 import socket
 import struct
 import time
 
-from . import children, debug, paths
+from . import children, config, debug, paths
 
 H265_PT = 125  # payload type the device answers with
-AUDIO = (111, "opus/48000/2")  # (payload type, rtpmap codec) the readers' SDP declares
+AUDIO = (0, "PCMU/8000")  # (payload type, rtpmap codec) the readers' SDP declares
 AUDIO_OFFSET = 2  # audio port = video port + AUDIO_OFFSET
 RTP_PORT = 47300  # ffplay window (watch); audio on 47302
 TRACK_PORT = (
@@ -72,23 +73,28 @@ def audio_codec(answer_sdp):
     return None
 
 
-def start_ffplay():
-    path = write_sdp(LIVE_SDP, RTP_PORT, AUDIO)
-    return children.popen(
-        [
-            paths.require_tool("ffplay"),
-            "-loglevel",
-            "error",
-            "-window_title",
-            "ImCam",
-            "-fflags",
-            "nobuffer",
-            "-protocol_whitelist",
-            "file,udp,rtp",
-            "-i",
-            path,
-        ]
-    )
+def player_command(path):
+    """IMCAM_PLAYER argv with the SDP `path` appended, or the default ffplay one when it is not set."""
+    argv = shlex.split(config.optional("IMCAM_PLAYER"), posix=os.name != "nt")
+    if argv:
+        return argv + [path]
+    return [
+        paths.require_tool("ffplay"),
+        "-loglevel",
+        "error",
+        "-window_title",
+        "ImCam",
+        "-fflags",
+        "nobuffer",
+        "-protocol_whitelist",
+        "file,udp,rtp",
+        "-i",
+        path,
+    ]
+
+
+def start_player():
+    return children.popen(player_command(write_sdp(LIVE_SDP, RTP_PORT, AUDIO)))
 
 
 class SnapshotFlag:

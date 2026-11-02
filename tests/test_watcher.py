@@ -80,6 +80,8 @@ def test_bridge_exposes_audio_and_records_it_when_present(launched, tmp_path):
     outs = outputs(watcher.bridge_command(record=str(tmp_path / "rec")))
     assert outs[watcher.BRIDGE_URL + "?pkt_size=1316"] == ["0:v"]
     assert outs[watcher.AUDIO_URL + "?pkt_size=1316"] == ["0:a?"]
+    cmd = watcher.bridge_command()
+    assert cmd[cmd.index(watcher.AUDIO_URL + "?pkt_size=1316") - 5] == "libopus"
     seg = [k for k in outs if k.endswith(".mkv")]
     assert outs[seg[0]] == ["0:v", "0:a?"]
 

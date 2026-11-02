@@ -39,12 +39,12 @@ from . import (
 
 def do_watch(c, serial, permit, track=False, record=None):
     """Sign in to the /im signaling server, send a WebRTC callRequest to the device
-    and show the incoming video in ffplay until Ctrl-C. Needs aiortc (~/.imcam/venv).
+    and show the incoming video in ffplay (or IMCAM_PLAYER) until Ctrl-C. Needs aiortc (~/.imcam/venv).
     --track runs babywatch on the stream; --record (which also starts it) saves .mkv segments."""
     r = relay.install(
         (relay.RTP_PORT,) + ((relay.TRACK_PORT,) if record or track else ())
     )
-    player, live = relay.start_ffplay(), None
+    player, live = relay.start_player(), None
     try:
         live = _start_tracker(record, track, r)
         call.call_once(c, serial, permit)

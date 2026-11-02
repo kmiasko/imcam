@@ -238,16 +238,6 @@ async def run_call(
                 for message in early:
                     await peer.add_remote_candidate(message)
                 early = []
-                # switchAudio (remote audio off) goes out right after the answer
-                sig.send(
-                    _call_msg(
-                        sid,
-                        serial,
-                        permit,
-                        "switchAudio",
-                        json.dumps({"type": 0, "act": 0}),
-                    )
-                )
             elif mt == "remoteCandidate":
                 if answered:
                     await peer.add_remote_candidate(d)

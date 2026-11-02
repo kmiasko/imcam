@@ -148,7 +148,7 @@ def test_call_request_carries_the_munged_offer_then_each_local_candidate():
     ]
 
 
-def test_answer_is_accepted_then_audio_is_switched_and_video_requested_once_connected():
+def test_answer_is_accepted_then_video_requested_once_connected():
     peer = FakePeer()
     reason, sig, peer = run(
         [answer("v=0 theirs"), lambda: peer.video_started, msg("hangup")], peer=peer
@@ -158,12 +158,10 @@ def test_answer_is_accepted_then_audio_is_switched_and_video_requested_once_conn
         "callRequest",
         "remoteCandidate",
         "remoteCandidate",
-        "switchAudio",
         "switchVideo",
         "hangup",
     ]
     assert json.loads(sig.of("switchVideo")[0]["message"]) == {"type": 2, "act": 0}
-    assert json.loads(sig.of("switchAudio")[0]["message"]) == {"type": 0, "act": 0}
 
 
 def test_candidates_before_the_answer_are_held_then_added_in_order():

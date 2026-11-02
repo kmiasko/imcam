@@ -73,6 +73,7 @@ go in the same places as the vendor constants below (environment, `./.env`, `~/.
 | `IMCAM_NOTIFY_COOLDOWN` | 600 | Minimum seconds between pushed `awake` alerts |
 | `IMCAM_STREAM_LOST_S` | 60 | Seconds without video before `stream_lost` |
 | `IMCAM_AUDIO_ANALYZER` | (none) | Command run on the audio stream (URL appended; split like the hook). Its JSON lines become events. |
+| `IMCAM_PLAYER` | (none) | `watch` player instead of ffplay (path of `~/.imcam/live.sdp` appended; split like the hook), e.g. `mpv --demuxer-lavf-o=protocol_whitelist=[file,udp,rtp] --profile=low-latency --untimed` |
 
 ### Event log
 

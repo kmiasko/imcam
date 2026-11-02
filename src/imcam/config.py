@@ -20,6 +20,7 @@ OPTIONAL = {
     "IMCAM_NOTIFY_COOLDOWN": "600",  # minimum seconds between "baby is up" alerts
     "IMCAM_STREAM_LOST_S": "60",  # no video for this long -> "stream lost" alert
     "IMCAM_AUDIO_ANALYZER": "",  # command run on the audio stream (URL appended); prints JSON events
+    "IMCAM_PLAYER": "",  # `watch` player command instead of ffplay (live.sdp path appended)
 }
 
 
