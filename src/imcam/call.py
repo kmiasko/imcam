@@ -10,6 +10,8 @@ import uuid
 
 from . import cloud, debug, stock_offer, testvideo, wsproto
 
+on_answer = None  # callable(answer_sdp); relay.install sets it to learn the negotiated audio codec
+
 
 def _ice_servers(rsp):
     from aiortc import RTCIceServer
@@ -130,6 +132,8 @@ class AiortcPeer:
     async def accept_answer(self, sdp):
         from aiortc import RTCSessionDescription
 
+        if on_answer:
+            on_answer(sdp)
         await self.pc.setRemoteDescription(
             RTCSessionDescription(sdp=sdp, type="answer")
         )

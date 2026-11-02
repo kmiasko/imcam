@@ -28,31 +28,102 @@ class FakeProc:
 def launched(monkeypatch, tmp_path):
     monkeypatch.setattr(watcher.shutil, "which", lambda name: "/bin/" + name)
     monkeypatch.setattr(paths, "require_tool", lambda name: "/bin/" + name)
-    monkeypatch.setattr(relay, "write_sdp", lambda path, port: path)
+    monkeypatch.setattr(relay, "write_sdp", lambda path, port, audio=None: path)
     monkeypatch.setenv("IMCAM_HOME", str(tmp_path))  # no user config.env / .env
     monkeypatch.chdir(tmp_path)
     return []
 
 
-def launcher(launched, lines=()):
+def launcher(launched, lines=(), analyzer_lines=()):
     def launch(cmd, stdout=None):
-        launched.append(FakeProc(cmd, lines if cmd[0].endswith("babywatch") else ()))
+        out = ()
+        if cmd[0].endswith("babywatch"):
+            out = lines
+        elif cmd[-1] == watcher.AUDIO_URL:
+            out = analyzer_lines
+        launched.append(FakeProc(cmd, out))
         return launched[-1]
 
     return launch
+
+
+def outputs(cmd):
+    """{output url/path: [map specs]} of an ffmpeg argv with -map before each output."""
+    out, maps = {}, []
+    i = cmd.index("-i") + 2
+    while i < len(cmd):
+        if cmd[i] == "-map":
+            maps.append(cmd[i + 1])
+            i += 2
+        elif cmd[i].startswith("-"):
+            i += 2
+        else:
+            out[cmd[i]], maps = maps, []
+            i += 1
+    return out
 
 
 def test_bridge_reads_the_track_sdp_and_feeds_babywatch(launched, tmp_path):
     cmd = watcher.bridge_command()
     assert cmd[0] == "/bin/ffmpeg"
     assert cmd[cmd.index("-i") + 1] == relay.TRACK_SDP
-    assert cmd[-1].startswith(watcher.BRIDGE_URL)
+    assert outputs(cmd)[watcher.BRIDGE_URL + "?pkt_size=1316"] == ["0:v"]
     assert "segment" not in cmd
     rec = watcher.bridge_command(record=str(tmp_path / "rec"))
     assert rec[-1].startswith(str(tmp_path / "rec"))
     assert (tmp_path / "rec").is_dir()
     assert watcher.babywatch_command()[:3] == ["/bin/babywatch", "live", "--rtsp"]
     assert watcher.babywatch_command()[3].startswith(watcher.BRIDGE_URL)
+
+
+def test_bridge_exposes_audio_and_records_it_when_present(launched, tmp_path):
+    outs = outputs(watcher.bridge_command(record=str(tmp_path / "rec")))
+    assert outs[watcher.BRIDGE_URL + "?pkt_size=1316"] == ["0:v"]
+    assert outs[watcher.AUDIO_URL + "?pkt_size=1316"] == ["0:a?"]
+    seg = [k for k in outs if k.endswith(".mkv")]
+    assert outs[seg[0]] == ["0:v", "0:a?"]
+
+
+def test_analyzer_is_off_by_default(launched):
+    assert watcher.analyzer_command() is None
+    w = watcher.WatchProcess(
+        launcher=launcher(launched), deliver=lambda *e: None, supervise=False
+    )
+    assert w.analyzer is None and len(launched) == 2
+    w.stop()
+
+
+def test_analyzer_events_are_delivered_and_bad_lines_ignored(launched, monkeypatch):
+    monkeypatch.setenv("IMCAM_AUDIO_ANALYZER", "babylisten live --db -40")
+    lines = [
+        "starting\n",
+        "[1]\n",
+        json.dumps({"message": "no event"}) + "\n",
+        json.dumps({"event": "noise", "message": "loud for 5 s", "push": True}) + "\n",
+        json.dumps({"event": "breathing_normal"}) + "\n",
+    ]
+    got = []
+    w = watcher.WatchProcess(
+        launcher=launcher(launched, analyzer_lines=lines),
+        deliver=lambda *e: got.append(e),
+        supervise=False,
+    )
+    assert launched[2].cmd == [
+        "babylisten",
+        "live",
+        "--db",
+        "-40",
+        watcher.AUDIO_URL,
+    ]
+    w._read_analyzer(launched[2].stdout)
+    assert got == [
+        ("noise", "loud for 5 s", True),
+        ("breathing_normal", "breathing_normal", False),
+    ]
+    launched[2].code = 1
+    assert w.ensure_running() and launched[3].cmd == launched[2].cmd
+    w.stop()
+    assert launched[3].terminated
 
 
 def test_missing_babywatch_is_a_clear_error(monkeypatch):
@@ -154,3 +225,73 @@ def test_start_tracker_only_when_tracking_or_recording(launched, monkeypatch, tm
     live = cli._start_tracker(str(tmp_path), False)
     assert launched[0].cmd[-1].startswith(str(tmp_path))
     live.stop()
+
+
+def recorded(launched, **kw):
+    rec = []
+    w = watcher.WatchProcess(
+        launcher=launcher(launched, **kw),
+        deliver=lambda *e: None,
+        record_event=lambda *e: rec.append(e),
+        supervise=False,
+    )
+    return w, rec
+
+
+def test_babywatch_lines_and_alerts_are_recorded(launched):
+    w, rec = recorded(launched)
+    rec.clear()
+    w._read(io.StringIO(ev(True) + "\n" + ev(True) + "\nnot json\n"))
+    assert [(r[0], r[1]) for r in rec] == [
+        ("babywatch", "state"),
+        ("imcam", "awake"),
+        ("babywatch", "state"),  # no notify change: still recorded
+    ]
+    assert rec[0][2] == "upright" and rec[0][4]["p"] == 0.99
+    assert rec[1][3] is True
+    w.stop()
+
+
+def test_analyzer_lines_are_recorded_once_with_extra_fields(launched, monkeypatch):
+    monkeypatch.setenv("IMCAM_AUDIO_ANALYZER", "/usr/bin/babylisten live")
+    line = {"event": "cry", "message": "crying", "push": True, "db": -20, "f0_hz": 410}
+    w, rec = recorded(launched)
+    rec.clear()
+    w._read_analyzer(io.StringIO(json.dumps(line) + "\n"))
+    assert rec == [("babylisten", "cry", "crying", True, line)]
+    w.stop()
+
+
+def test_session_and_restart_markers_and_health_are_recorded(launched):
+    clock, rx = Clock(), [None]
+    rec = []
+    w = watcher.WatchProcess(
+        launcher=launcher(launched),
+        deliver=lambda *e: None,
+        record_event=lambda *e: rec.append(e),
+        rx=lambda: rx[0],
+        mono=clock,
+        supervise=False,
+    )
+    launched[1].code = 3
+    assert w.ensure_running()
+    rx[0] = clock.t
+    clock.t += 61
+    w.check_health()
+    w.stop()
+    w.stop()
+    assert [(r[0], r[1]) for r in rec] == [
+        ("imcam", "session_start"),
+        ("imcam", "restart"),
+        ("imcam", "stream_lost"),
+        ("imcam", "session_stop"),
+    ]
+    assert rec[1][2] == "babywatch exited (3)" and rec[2][3] is True
+
+
+def test_default_event_log_is_in_imcam_home(launched, tmp_path):
+    w = watcher.WatchProcess(
+        launcher=launcher(launched), deliver=lambda *e: None, supervise=False
+    )
+    w.stop()
+    assert (tmp_path / "events.db").exists()

@@ -136,9 +136,15 @@ def doctor():
         "%-8s %s"
         % ("notify", notify.backend() or "no desktop backend (alerts only logged)")
     )
+    analyzer = watcher.analyzer_command()
+    if analyzer:
+        found = __import__("shutil").which(analyzer[0])
+        print("%-8s %s" % ("analyzer", found or "MISSING (%s)" % analyzer[0]))
+        ok &= bool(found)
     for name in config.OPTIONAL:
         print("%-8s %s=%r" % ("config", name, config.optional(name)))
     print("data dir %s" % paths.home())
+    print("event log %s" % paths.path("events.db"))
     return 0 if ok else 1
 
 

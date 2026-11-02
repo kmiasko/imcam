@@ -19,6 +19,7 @@ OPTIONAL = {
     "IMCAM_NOTIFY_HOOK": "",  # command run on every alert; env IMCAM_EVENT / IMCAM_MESSAGE
     "IMCAM_NOTIFY_COOLDOWN": "600",  # minimum seconds between "baby is up" alerts
     "IMCAM_STREAM_LOST_S": "60",  # no video for this long -> "stream lost" alert
+    "IMCAM_AUDIO_ANALYZER": "",  # command run on the audio stream (URL appended); prints JSON events
 }
 
 

@@ -43,6 +43,56 @@ def test_h265_packet_is_copied_to_every_consumer_port():
     assert sent == [(relay.RTP_PORT, pkt), (relay.TRACK_PORT, pkt)]
 
 
+ANSWER = (
+    "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 125\r\na=rtpmap:125 H265/90000\r\n"
+    "m=audio 9 UDP/TLS/RTP/SAVPF %s\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:111 opus/48000/2\r\n"
+)
+
+
+def test_audio_codec_is_read_from_the_answer():
+    assert relay.audio_codec(ANSWER % "111 0") == (111, "opus/48000/2")
+    assert relay.audio_codec(ANSWER % "0") == (0, "PCMU/8000")
+    assert relay.audio_codec(ANSWER.split("m=audio")[0]) is None
+    assert relay.audio_codec(ANSWER.replace("m=audio 9", "m=audio 0") % "111") is None
+
+
+def test_negotiated_audio_goes_to_the_audio_ports_and_not_to_aiortc():
+    clock = Clock()
+    r, sent, _ = make_relay(ports=(relay.RTP_PORT, relay.TRACK_PORT), clock=clock)
+    pkt = rtp(pt=111)
+    assert not r.consumes(pkt)  # before the answer: unknown, left to aiortc
+    r.on_answer(ANSWER % "111 0")
+    assert r.consumes(pkt) and r.on_rtp(pkt) is None
+    assert sent == [
+        (relay.RTP_PORT + relay.AUDIO_OFFSET, pkt),
+        (relay.TRACK_PORT + relay.AUDIO_OFFSET, pkt),
+    ]
+    assert r.last_audio_rx == clock.t and r.last_rx is None
+
+
+def test_audio_in_another_codec_than_the_readers_expect_is_dropped():
+    r, sent, logs = make_relay()
+    r.on_answer(ANSWER % "0")
+    assert r.consumes(rtp(pt=0))
+    r.on_rtp(rtp(pt=0))
+    assert sent == [] and "not relayed" in logs[0]
+
+
+def test_reader_ports_do_not_overlap():
+    """Each reader binds its port and port+1 (RTCP), for video and audio."""
+    bound = []
+    for port in (relay.RTP_PORT, relay.TRACK_PORT):
+        bound += [
+            port,
+            port + 1,
+            port + relay.AUDIO_OFFSET,
+            port + relay.AUDIO_OFFSET + 1,
+        ]
+    bound += [relay.SNAP_PORT, relay.SNAP_PORT + 1]
+    assert len(set(bound)) == len(bound)
+    assert not {47308, 47314} & set(bound)  # watcher's MPEG-TS outputs
+
+
 def test_other_payload_types_are_not_forwarded():
     r, sent, _ = make_relay()
     assert r.on_rtp(rtp(pt=96)) is None
@@ -116,3 +166,10 @@ def test_write_sdp_describes_the_forwarded_stream(tmp_path):
     sdp = open(path).read()
     assert "m=video 47304 RTP/AVP %d" % relay.H265_PT in sdp
     assert "a=rtpmap:%d H265/90000" % relay.H265_PT in sdp
+
+
+def test_write_sdp_adds_audio_two_ports_up(tmp_path):
+    path = relay.write_sdp(str(tmp_path / "x.sdp"), 47304, relay.AUDIO)
+    sdp = open(path).read()
+    assert sdp.index("m=video 47304") < sdp.index("m=audio 47306 RTP/AVP 111")
+    assert "a=rtpmap:111 opus/48000/2" in sdp

@@ -12,7 +12,7 @@ Needs Python 3.10+ and **ffmpeg + ffplay on PATH**
 (Linux: your package manager; Windows: `winget install Gyan.FFmpeg`, then reopen the terminal).
 
     pipx install .          # or: pip install .
-    imcam doctor            # checks ffmpeg, ffplay, babywatch, notify-send, Python deps, vendor constants
+    imcam doctor            # checks ffmpeg, ffplay, babywatch, notify-send, audio analyzer, Python deps, vendor constants
 
 ## Use
 
@@ -35,6 +35,24 @@ imcam's RTP `.sdp`, so `--track`, `--record` and `monitor` start an ffmpeg that 
 `udp://127.0.0.1:47308` (and writes 10-minute `.mkv` segments with `--record`), plus `babywatch live --rtsp udp://127.0.0.1:47308`.
 If either process exits, imcam starts it again (the ffmpeg once video arrives).
 
+### Streams
+
+While `--track`, `--record` or `monitor` runs, the ffmpeg bridge publishes two local MPEG-TS streams:
+
+| URL | Content | Read by |
+| --- | --- | --- |
+| `udp://127.0.0.1:47308` | camera video (H.265) | babywatch |
+| `udp://127.0.0.1:47314` | camera audio (Opus) | anything you like, e.g. `ffplay udp://127.0.0.1:47314` or an audio analyzer |
+
+UDP output needs no reader; packets nobody reads are dropped. `--record` segments hold video and audio, and
+`imcam watch` plays the sound in the ffplay window. The camera must answer with Opus audio; otherwise imcam logs that
+audio is not relayed and video works as before.
+
+An audio analyzer (a separate program, like babywatch for video) can be run on the audio stream with
+`IMCAM_AUDIO_ANALYZER`. imcam runs that command with the audio URL appended, restarts it if it exits, and reads JSON
+lines from its stdout: `{"event": "noise", "message": "loud for 5 s", "push": true}` becomes event `noise` (below),
+pushed when `push` is true. The analyzer does its own cooldown. Other stdout lines are ignored.
+
 ### Alerts
 
 | Event | When | Pushed |
@@ -43,6 +61,7 @@ If either process exits, imcam starts it again (the ffmpeg once video arrives).
 | `down` | the baby is no longer up (lying, out of view, or an adult came) | no, logged only |
 | `stream_lost` | no video from the camera for `IMCAM_STREAM_LOST_S` seconds | yes |
 | `stream_restored` | video is back after `stream_lost` | yes |
+| any name | printed by the `IMCAM_AUDIO_ANALYZER` program | when it says `"push": true` |
 
 Every event is a line on stderr. Pushed events also become a desktop notification (`notify-send` on Linux, `osascript` on
 macOS, `winotify` toasts on Windows, a beep if that fails) and run your hook command, if one is set. Optional settings
@@ -53,14 +72,45 @@ go in the same places as the vendor constants below (environment, `./.env`, `~/.
 | `IMCAM_NOTIFY_HOOK` | (none) | Command run on each pushed event, with `IMCAM_EVENT` and `IMCAM_MESSAGE` in its environment. It is split into words and run without a shell; use a script for pipes, e.g. to send the message with ntfy or a phone push service. |
 | `IMCAM_NOTIFY_COOLDOWN` | 600 | Minimum seconds between pushed `awake` alerts |
 | `IMCAM_STREAM_LOST_S` | 60 | Seconds without video before `stream_lost` |
+| `IMCAM_AUDIO_ANALYZER` | (none) | Command run on the audio stream (URL appended; split like the hook). Its JSON lines become events. |
+
+### Event log
+
+`monitor` writes every event to an SQLite database, `~/.imcam/events.db`, so a night can be looked at later. It is in WAL
+mode: `sqlite3` or another program can read it while imcam runs. A failed write prints one `eventlog:` line and imcam
+keeps running.
+
+```sql
+CREATE TABLE events (
+  id      INTEGER PRIMARY KEY,
+  ts      REAL NOT NULL,      -- unix time when imcam received the event
+  source  TEXT NOT NULL,      -- 'imcam', 'babywatch', or the analyzer program name (e.g. 'babylisten')
+  name    TEXT NOT NULL,      -- event name
+  message TEXT,
+  push    INTEGER NOT NULL DEFAULT 0,
+  data    TEXT                -- the producer's JSON object, as received
+);
+```
+
+| Source | Names | data |
+| --- | --- | --- |
+| `imcam` | `session_start`, `session_stop`, `restart` (a child exited), and the alerts `awake`, `down`, `stream_lost`, `stream_restored` | none |
+| `babywatch` | `state`, one row per JSON line (also lines that change no alert); `message` is babywatch's `state` | the line |
+| analyzer (`IMCAM_AUDIO_ANALYZER`) | the line's `event` | the line, with any extra fields (`db`, `rate_bpm`, ...) |
+
+A new analyzer that prints the same JSON lines is logged with no change to imcam. Example, the last 8 hours:
+
+```sh
+sqlite3 ~/.imcam/events.db "select datetime(ts,'unixepoch','localtime'), source, name, message from events where ts > unixepoch('now','-8 hours') order by ts"
+```
 
 ### Stopping
 
 Ctrl+C, closing the terminal (SIGHUP) and `kill` (SIGTERM) end the call with the camera and stop every process imcam started
-(ffplay, the ffmpeg bridge, babywatch). ffmpeg gets time to finish the current `.mkv`. If imcam is killed with SIGKILL, the
+(ffplay, the ffmpeg bridge, babywatch, the audio analyzer). ffmpeg gets time to finish the current `.mkv`. If imcam is killed with SIGKILL, the
 kernel stops those processes on Linux. On other systems they are only stopped when imcam exits normally.
 
-Data (session, SDP files) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
+Data (session, SDP files, the event log `events.db`) lives in `~/.imcam` (`%USERPROFILE%\.imcam` on Windows); set `IMCAM_HOME` to move it.
 babywatch keeps its own data (model, crib positions) in `~/.babywatch`.
 
 ## Vendor constants
